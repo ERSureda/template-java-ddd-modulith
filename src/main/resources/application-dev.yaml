@@ -26,7 +26,7 @@
 logging:
   level:
     root: INFO
-    com.taxai: DEBUG
+    com.template: DEBUG
     org.springframework.web: INFO
     org.springframework.modulith: DEBUG
     org.hibernate.SQL: DEBUG

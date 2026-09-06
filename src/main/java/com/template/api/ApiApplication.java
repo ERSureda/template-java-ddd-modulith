@@ -1,4 +1,4 @@
-package com.taxai.api;
+package com.template.api;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

@@ -39,7 +39,7 @@ server:
 logging:
   level:
     root: INFO
-    com.taxai: INFO
+    com.template: INFO
     org.springframework.web: WARN
     org.hibernate: WARN
     org.flywaydb: INFO
