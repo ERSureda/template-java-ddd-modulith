@@ -1,0 +1,19 @@
+﻿spring:
+  application:
+    name: seed-architecture-test
+  main:
+    banner-mode: 'off'
+  threads:
+    virtual:
+      enabled: true
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration
+
+logging:
+  level:
+    root: WARN
+    com.taxai: INFO
+    org.springframework.modulith: INFO
