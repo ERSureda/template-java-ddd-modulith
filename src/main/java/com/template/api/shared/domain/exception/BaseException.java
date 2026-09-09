@@ -1,68 +1,75 @@
 package com.template.api.shared.domain.exception;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
+import com.template.api.shared.domain.error.ErrorCategory;
+import com.template.api.shared.domain.error.ErrorCode;
+
+import java.io.Serial;
 import java.util.Objects;
 
 /**
- * Root of the exception hierarchy. The stack trace and suppression policy is derived from the
- * {@link ErrorCategory}, so a business failure cannot pay for diagnostics it does not need and a
- * technical failure cannot lose them.
- *
- * <p><b>Never override {@code fillInStackTrace()}.</b> {@link Throwable} invokes it virtually
- * before subclass fields are assigned, so any override reading own state reads the default and
- * disables the trace exactly where it was meant to be kept.
+ * Raíz jerárquica de todas las excepciones del sistema.
+ * <p>
+ * Diseñada para ofrecer alto rendimiento en la JVM omitiendo la captura de stack trace
+ * cuando la {@link ErrorCategory} no requiere diagnósticos forenses
+ * (e.g. errores de negocio o validación de usuario).
+ * <p>
+ * Es completamente inmutable y segura para concurrencia.
  */
-public abstract sealed class BaseException extends RuntimeException
-        permits ConflictException, DomainException, ExternalServiceException, ForbiddenException,
-                InfrastructureException, RateLimitExceededException, ResourceNotFoundException,
-                ServiceUnavailableException, UnauthorizedException, ValidationException {
+public abstract class BaseException extends RuntimeException {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
 
     private final ErrorCode errorCode;
     private final ErrorCategory category;
-    private final List<Object> messageArgs;
 
     protected BaseException(
             ErrorCode errorCode,
             ErrorCategory category,
             String message,
-            Throwable cause,
-            Object... messageArgs) {
-        super(message, cause, capturesDiagnostics(category), capturesDiagnostics(category));
-        this.errorCode = Objects.requireNonNull(errorCode, "errorCode cannot be null");
-        this.category = Objects.requireNonNull(category, "category cannot be null");
-        this.messageArgs = asImmutableList(messageArgs);
+            Throwable cause
+    ) {
+        super(
+                resolveMessage(errorCode, message),
+                cause,
+                /* enableSuppression = */ true,
+                /* writableStackTrace = */ capturesDiagnostics(category)
+        );
+
+        this.errorCode = errorCode;
+        this.category = category;
     }
 
-    public String getCode() {
-        return errorCode.code();
-    }
-
-    public ErrorCode getErrorCode() {
-        return errorCode;
-    }
-
-    public ErrorCategory getCategory() {
-        return category;
-    }
-
-    public String getMessageKey() {
-        return errorCode.messageKey();
-    }
-
-    /** Positional arguments for {@link #getMessageKey()}. Immutable container, shallow contents. */
-    public List<Object> getMessageArgs() {
-        return messageArgs;
+    protected BaseException(
+            ErrorCode errorCode,
+            ErrorCategory category,
+            String message
+    ) {
+        this(errorCode, category, message, null);
     }
 
     private static boolean capturesDiagnostics(ErrorCategory category) {
-        return Objects.requireNonNull(category, "category cannot be null").capturesDiagnostics();
+        return Objects.requireNonNull(category, "category")
+                .capturesDiagnostics();
     }
 
-    private static List<Object> asImmutableList(Object[] args) {
-        return args == null || args.length == 0
-                ? List.of()
-                : Collections.unmodifiableList(Arrays.asList(args.clone()));
+    private static String resolveMessage(
+            ErrorCode errorCode,
+            String message
+    ) {
+        if (message != null && !message.isBlank()) {
+            return message;
+        }
+
+        return Objects.requireNonNull(errorCode, "errorCode")
+                .code();
+    }
+
+    public final ErrorCode getErrorCode() {
+        return errorCode;
+    }
+
+    public final ErrorCategory getCategory() {
+        return category;
     }
 }

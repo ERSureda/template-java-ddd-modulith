@@ -10,13 +10,12 @@ public abstract class AggregateRoot<T> extends BaseEntity<T> {
 
     private final transient List<DomainEvent> domainEvents = new ArrayList<>();
 
-    protected void registerEvent(DomainEvent event) {
-        Objects.requireNonNull(event, "EVENT_CANNOT_BE_NULL");
-        this.domainEvents.add(event);
-    }
-
     public boolean hasDomainEvents() {
         return !this.domainEvents.isEmpty();
+    }
+
+    protected void registerEvent(DomainEvent event) {
+        domainEvents.add(Objects.requireNonNull(event, "EVENT_CANNOT_BE_NULL"));
     }
 
     public List<DomainEvent> pullDomainEvents() {
