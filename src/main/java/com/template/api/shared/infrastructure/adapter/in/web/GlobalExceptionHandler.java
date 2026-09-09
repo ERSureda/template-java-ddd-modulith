@@ -5,7 +5,12 @@ import com.template.api.shared.domain.error.ErrorCategory;
 import com.template.api.shared.domain.exception.BaseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.*;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -13,46 +18,71 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
-import java.net.URI;
-import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 
-// TODO: Mejorar y optimizar.
+/**
+ * Manejador centralizado y estandarizado de excepciones para la capa Web.
+ * <p>
+ * Transforma todas las excepciones de la aplicación al contrato ultraligero {@link ErrorResponse},
+ * cumpliendo con la regla normativa {@code INP-03} y la decisión de arquitectura {@code ADR-03}.
+ * <p>
+ * Características clave:
+ * <ul>
+ *   <li><b>Rendimiento y coste cero:</b> No genera ni inspecciona stack traces para errores de negocio/cliente.</li>
+ *   <li><b>Logging inteligente:</b> Registra en {@code WARN} (1 línea) fallos de validación/cliente, y en {@code ERROR} (con stack trace) fallos imprevistos o de sistema.</li>
+ *   <li><b>Seguridad:</b> Enmascara detalles y trazas internas en errores 500 para evitar fugas de información.</li>
+ *   <li><b>Homologación total:</b> Sustituye {@link ProblemDetail} de Spring por {@link ErrorResponse} en todos los endpoints.</li>
+ * </ul>
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    private static final String PROPERTY_ERROR_CODE = "errorCode";
-    private static final String PROPERTY_TIMESTAMP = "timestamp";
-    private static final String PROPERTY_VIOLATIONS = "violations";
-    private static final String URN_TYPE_PREFIX = "urn:error-type:";
+    public static final String GENERIC_INTERNAL_ERROR_MESSAGE =
+            "Ha ocurrido un error interno e inesperado en el servidor";
 
-    @ExceptionHandler(BaseException.class)
-    public ResponseEntity<ProblemDetail> handleBaseException(BaseException ex) {
-        ErrorCategory category = ex.getCategory();
-        HttpStatus status = HttpErrorCategoryMapper.toHttpStatus(category);
+    public static final String VALIDATION_FAILED_MESSAGE =
+            "La solicitud contiene campos inválidos o ausentes";
 
-        // Logging inteligente basado en la directiva de la JVM:
-        // Si capturesDiagnostics() == false -> 1 línea limpia en WARN sin stack trace.
-        // Si capturesDiagnostics() == true  -> Stack trace completo en ERROR.
-        if (category.capturesDiagnostics()) {
-            log.error("Fallo técnico de infraestructura o sistema [code={}]: {}",
-                    ex.getErrorCode().code(), ex.getMessage(), ex);
-        } else {
-            log.warn("Fallo controlado de negocio/cliente [code={}]: {}",
-                    ex.getErrorCode().code(), ex.getMessage());
-        }
+    private final boolean maskInternalDetails;
 
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, ex.getMessage());
-        enrichProblemDetail(problem, ex.getErrorCode().code(), category.name());
+    public GlobalExceptionHandler() {
+        this(true);
+    }
 
-        return ResponseEntity.status(status).body(problem);
+    public GlobalExceptionHandler(
+            @Value("${application.errors.mask-internal-details:true}") boolean maskInternalDetails
+    ) {
+        this.maskInternalDetails = maskInternalDetails;
     }
 
     // =========================================================================
-    // 2. HOMOLOGACIÓN DE ERRORS DE BEAN VALIDATION (@Valid en DTOs)
+    // 1. EXCEPCIONES DE DOMINIO Y NEGOCIO (BaseException y subclases)
+    // =========================================================================
+
+    @ExceptionHandler(BaseException.class)
+    public ResponseEntity<ErrorResponse> handleBaseException(BaseException ex) {
+        ErrorCategory category = ex.getCategory();
+        HttpStatus status = HttpErrorCategoryMapper.toHttpStatus(category);
+        String code = ex.getErrorCode().code();
+
+        if (category.capturesDiagnostics()) {
+            log.error("Fallo técnico de infraestructura o sistema [code={}]: {}", code, ex.getMessage(), ex);
+        } else {
+            log.warn("Fallo controlado de negocio/cliente [code={}]: {}", code, ex.getMessage());
+        }
+
+        String detail = (category == ErrorCategory.INTERNAL && maskInternalDetails)
+                ? GENERIC_INTERNAL_ERROR_MESSAGE
+                : ex.getMessage();
+
+        ErrorResponse response = ErrorResponse.of(status.value(), code, detail);
+        return ResponseEntity.status(status).body(response);
+    }
+
+    // =========================================================================
+    // 2. ERRORES DE BEAN VALIDATION (@Valid en DTOs y Requests)
     // =========================================================================
 
     @Override
@@ -62,61 +92,97 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             HttpStatusCode status,
             WebRequest request
     ) {
-        log.warn("Solicitud HTTP rechazada por Bean Validation: {} errores de campo detectados",
+        log.warn("Solicitud HTTP rechazada por validación de campos: {} errores detectados",
                 ex.getBindingResult().getFieldErrorCount());
 
-        List<Map<String, String>> violations = ex.getBindingResult().getFieldErrors().stream()
+        List<ValidationErrorDetail> errors = ex.getBindingResult().getFieldErrors().stream()
                 .map(this::mapFieldError)
                 .toList();
 
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
-                HttpStatus.BAD_REQUEST,
-                "La solicitud contiene campos inválidos o ausentes"
+        ErrorResponse response = ErrorResponse.of(
+                HttpStatus.BAD_REQUEST.value(),
+                CommonError.VALIDATION_ERROR.code(),
+                VALIDATION_FAILED_MESSAGE,
+                errors
         );
-        enrichProblemDetail(problem, CommonError.VALIDATION_ERROR.code(), ErrorCategory.VALIDATION.name());
-        problem.setProperty(PROPERTY_VIOLATIONS, violations);
 
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(problem);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).headers(headers).body(response);
     }
 
     // =========================================================================
-    // 3. FALLBACK CATCH-ALL (Cualquier error inesperado de la JVM / Framework)
+    // 3. FALLBACK CATCH-ALL (Cualquier excepción imprevista de la JVM / Framework)
     // =========================================================================
 
     @ExceptionHandler(Throwable.class)
-    public ResponseEntity<ProblemDetail> handleUnhandledException(Throwable ex) {
-        // Al ser un error imprevisto (NPE, OutOfMemory, Bug), SIEMPRE se registra con stack trace completo
+    public ResponseEntity<ErrorResponse> handleUnhandledException(Throwable ex) {
         log.error("Excepción no controlada interceptada en capa web", ex);
 
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
-                HttpStatus.INTERNAL_SERVER_ERROR,
-                "Ha ocurrido un error interno e inesperado en el servidor"
-        );
-        enrichProblemDetail(
-                problem,
+        String detail = maskInternalDetails
+                ? GENERIC_INTERNAL_ERROR_MESSAGE
+                : (ex.getMessage() != null ? ex.getMessage() : GENERIC_INTERNAL_ERROR_MESSAGE);
+
+        ErrorResponse response = ErrorResponse.of(
+                HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 CommonError.INTERNAL_ERROR.code(),
-                ErrorCategory.INTERNAL.name()
+                detail
         );
 
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(problem);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
     }
 
     // =========================================================================
-    // MÉTODOS AUXILIARES DE ENRIQUECIMIENTO
+    // 4. SOBRESCRITURA DE FRAMEWORK HANDLER (Evita fugas de ProblemDetail)
     // =========================================================================
 
-    private void enrichProblemDetail(ProblemDetail problem, String errorCode, String title) {
-        problem.setTitle(title);
-        problem.setType(URI.create(URN_TYPE_PREFIX + errorCode.toLowerCase().replace('_', '-')));
-        problem.setProperty(PROPERTY_ERROR_CODE, errorCode);
-        problem.setProperty(PROPERTY_TIMESTAMP, Instant.now());
+    @Override
+    protected ResponseEntity<Object> createResponseEntity(
+            Object body,
+            HttpHeaders headers,
+            HttpStatusCode statusCode,
+            WebRequest request
+    ) {
+        if (body instanceof ErrorResponse) {
+            return ResponseEntity.status(statusCode).headers(headers).body(body);
+        }
+
+        String code = mapStatusCodeToErrorCode(statusCode);
+        String detail;
+        if (body instanceof ProblemDetail problemDetail && problemDetail.getDetail() != null) {
+            detail = problemDetail.getDetail();
+        } else {
+            detail = statusCode.toString();
+        }
+
+        ErrorResponse errorResponse = ErrorResponse.of(statusCode.value(), code, detail);
+        return ResponseEntity.status(statusCode).headers(headers).body(errorResponse);
     }
 
-    private Map<String, String> mapFieldError(FieldError fieldError) {
-        return Map.of(
-                "field", fieldError.getField(),
-                "message", fieldError.getDefaultMessage() != null ? fieldError.getDefaultMessage() : "Campo inválido",
-                "rejectedValue", String.valueOf(fieldError.getRejectedValue())
-        );
+    // =========================================================================
+    // MÉTODOS AUXILIARES PRIVADOS
+    // =========================================================================
+
+    private ValidationErrorDetail mapFieldError(FieldError fieldError) {
+        String field = fieldError.getField();
+        String message = fieldError.getDefaultMessage() != null
+                ? fieldError.getDefaultMessage()
+                : "Campo inválido";
+        Object rejectedValue = fieldError.getRejectedValue();
+
+        return new ValidationErrorDetail(field, message, rejectedValue);
+    }
+
+    private static String mapStatusCodeToErrorCode(HttpStatusCode status) {
+        int value = status.value();
+        return switch (value) {
+            case 400 -> CommonError.VALIDATION_ERROR.code();
+            case 401 -> CommonError.UNAUTHENTICATED_ACCESS.code();
+            case 403 -> CommonError.ACCESS_DENIED.code();
+            case 404 -> CommonError.RESOURCE_NOT_FOUND.code();
+            case 409 -> CommonError.RESOURCE_ALREADY_EXISTS.code();
+            case 429 -> CommonError.RATE_LIMIT_EXCEEDED.code();
+            case 503 -> CommonError.SERVICE_UNAVAILABLE.code();
+            case 502 -> CommonError.EXTERNAL_SERVICE_ERROR.code();
+            default -> value >= 500 ? CommonError.INTERNAL_ERROR.code() : CommonError.VALIDATION_ERROR.code();
+        };
     }
 }
