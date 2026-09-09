@@ -1,6 +1,6 @@
-﻿spring:
+spring:
   application:
-    name: seed-architecture-test
+    name: template-api-test
   main:
     banner-mode: 'off'
   threads:
@@ -15,5 +15,5 @@
 logging:
   level:
     root: WARN
-    com.taxai: INFO
+    com.template: INFO
     org.springframework.modulith: INFO
