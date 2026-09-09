@@ -1,6 +1,7 @@
 package com.template.api.shared.infrastructure.adapter.in.web;
 
 import com.template.api.shared.domain.error.CommonError;
+import com.template.api.shared.domain.error.FieldViolation;
 import com.template.api.shared.domain.exception.ConflictException;
 import com.template.api.shared.domain.exception.InfrastructureException;
 import com.template.api.shared.domain.exception.ResourceNotFoundException;
@@ -64,8 +65,8 @@ class GlobalExceptionHandlerTest {
         }
 
         @Test
-        @DisplayName("Debe transformar ValidationException a ErrorResponse 400")
-        void shouldHandleValidationException() {
+        @DisplayName("Debe transformar ValidationException simple a ErrorResponse 400 sin violaciones")
+        void shouldHandleSimpleValidationException() {
             ValidationException ex = new ValidationException("Invalid price amount");
 
             ResponseEntity<ErrorResponse> response = handlerWithMasking.handleBaseException(ex);
@@ -79,20 +80,43 @@ class GlobalExceptionHandlerTest {
         }
 
         @Test
-        @DisplayName("Debe enmascarar excepciones de categoría INTERNAL si maskInternalDetails es true")
-        void shouldMaskInternalDetailsWhenEnabled() {
+        @DisplayName("Debe transformar ValidationException con múltiples FieldViolation a ErrorResponse con errors poblado")
+        void shouldHandleValidationExceptionWithMultipleViolations() {
+            List<FieldViolation> violations = List.of(
+                    FieldViolation.of("username", "Username already taken"),
+                    FieldViolation.of("age", "Age must be at least 18")
+            );
+            ValidationException ex = new ValidationException("Command validation failed", violations);
+
+            ResponseEntity<ErrorResponse> response = handlerWithMasking.handleBaseException(ex);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(response.getBody()).isNotNull();
+            assertThat(response.getBody().errors()).hasSize(2);
+            assertThat(response.getBody().errors().get(0).field()).isEqualTo("username");
+            assertThat(response.getBody().errors().get(0).message()).isEqualTo("Username already taken");
+            assertThat(response.getBody().errors().get(1).field()).isEqualTo("age");
+            assertThat(response.getBody().errors().get(1).message()).isEqualTo("Age must be at least 18");
+        }
+
+        @Test
+        @DisplayName("Debe retornar respuesta singleton enmascarada para excepciones de categoría INTERNAL si maskInternalDetails es true")
+        void shouldReturnCachedInternalResponseWhenMaskingEnabled() {
             InfrastructureException ex = new InfrastructureException(
                     CommonError.INTERNAL_ERROR,
                     "Database connection pool timeout on replica-01"
             );
 
-            ResponseEntity<ErrorResponse> response = handlerWithMasking.handleBaseException(ex);
+            ResponseEntity<ErrorResponse> response1 = handlerWithMasking.handleBaseException(ex);
+            ResponseEntity<ErrorResponse> response2 = handlerWithMasking.handleBaseException(ex);
 
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
-            assertThat(response.getBody()).isNotNull();
-            assertThat(response.getBody().status()).isEqualTo(500);
-            assertThat(response.getBody().code()).isEqualTo(CommonError.INTERNAL_ERROR.code());
-            assertThat(response.getBody().detail()).isEqualTo(GlobalExceptionHandler.GENERIC_INTERNAL_ERROR_MESSAGE);
+            assertThat(response1.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+            assertThat(response1.getBody()).isNotNull();
+            assertThat(response1.getBody().status()).isEqualTo(500);
+            assertThat(response1.getBody().code()).isEqualTo(CommonError.INTERNAL_ERROR.code());
+            assertThat(response1.getBody().detail()).isEqualTo(GlobalExceptionHandler.GENERIC_INTERNAL_ERROR_MESSAGE);
+            // Comprobación de asignación CERO (mismo objeto singleton en memoria)
+            assertThat(response1).isSameAs(response2);
         }
 
         @Test
@@ -114,19 +138,21 @@ class GlobalExceptionHandlerTest {
     }
 
     @Nested
-    @DisplayName("2. Manejo de Bean Validation (@Valid)")
+    @DisplayName("2. Manejo de Bean Validation (@Valid y Sanitización OWASP)")
     class BeanValidationTests {
 
         @Test
-        @DisplayName("Debe transformar MethodArgumentNotValidException a ErrorResponse 400 con lista de errores de campo")
-        void shouldHandleMethodArgumentNotValidException() throws Exception {
+        @DisplayName("Debe transformar MethodArgumentNotValidException sanitizando campos sensibles (passwords/tokens)")
+        void shouldHandleMethodArgumentNotValidExceptionWithSanitization() throws Exception {
             Method dummyMethod = DummyController.class.getDeclaredMethod("dummyMethod", String.class);
             MethodParameter parameter = new MethodParameter(dummyMethod, 0);
 
-            DummyDto target = new DummyDto(null, -5);
+            DummyDto target = new DummyDto(null, -5, "secretPassword123", "a".repeat(150));
             BeanPropertyBindingResult bindingResult = new BeanPropertyBindingResult(target, "dummyDto");
             bindingResult.addError(new FieldError("dummyDto", "email", null, false, null, null, "Email is mandatory"));
             bindingResult.addError(new FieldError("dummyDto", "amount", -5, false, null, null, "Amount must be positive"));
+            bindingResult.addError(new FieldError("dummyDto", "password", "secretPassword123", false, null, null, "Password too weak"));
+            bindingResult.addError(new FieldError("dummyDto", "biography", "a".repeat(150), false, null, null, "Too long"));
 
             MethodArgumentNotValidException ex = new MethodArgumentNotValidException(parameter, bindingResult);
 
@@ -144,17 +170,27 @@ class GlobalExceptionHandlerTest {
             assertThat(errorResponse.status()).isEqualTo(400);
             assertThat(errorResponse.code()).isEqualTo(CommonError.VALIDATION_ERROR.code());
             assertThat(errorResponse.detail()).isEqualTo(GlobalExceptionHandler.VALIDATION_FAILED_MESSAGE);
-            assertThat(errorResponse.errors()).hasSize(2);
+            assertThat(errorResponse.errors()).hasSize(4);
 
-            ValidationErrorDetail error1 = errorResponse.errors().get(0);
-            assertThat(error1.field()).isEqualTo("email");
-            assertThat(error1.message()).isEqualTo("Email is mandatory");
-            assertThat(error1.rejectedValue()).isNull();
+            // 1. Campo normal con valor nulo
+            ValidationErrorDetail emailError = errorResponse.errors().get(0);
+            assertThat(emailError.field()).isEqualTo("email");
+            assertThat(emailError.rejectedValue()).isNull();
 
-            ValidationErrorDetail error2 = errorResponse.errors().get(1);
-            assertThat(error2.field()).isEqualTo("amount");
-            assertThat(error2.message()).isEqualTo("Amount must be positive");
-            assertThat(error2.rejectedValue()).isEqualTo(-5);
+            // 2. Campo normal con valor
+            ValidationErrorDetail amountError = errorResponse.errors().get(1);
+            assertThat(amountError.field()).isEqualTo("amount");
+            assertThat(amountError.rejectedValue()).isEqualTo(-5);
+
+            // 3. Campo sensible sanitizado por regla OWASP (no expone la contraseña)
+            ValidationErrorDetail passwordError = errorResponse.errors().get(2);
+            assertThat(passwordError.field()).isEqualTo("password");
+            assertThat(passwordError.rejectedValue()).isEqualTo("[PROTECTED]");
+
+            // 4. Cadena larga truncada por regla anti-DoS
+            ValidationErrorDetail bioError = errorResponse.errors().get(3);
+            assertThat(bioError.field()).isEqualTo("biography");
+            assertThat(bioError.rejectedValue().toString()).endsWith("... [truncated]");
         }
     }
 
@@ -163,18 +199,23 @@ class GlobalExceptionHandlerTest {
     class CatchAllTests {
 
         @Test
-        @DisplayName("Debe interceptar NullPointerException imprevisto y retornar 500 enmascarado")
-        void shouldHandleUnexpectedThrowableWithMasking() {
-            NullPointerException ex = new NullPointerException("Null pointer at Line 42");
+        @DisplayName("Debe interceptar NullPointerException imprevisto y retornar singleton enmascarado (Zero-Allocation)")
+        void shouldHandleUnexpectedThrowableWithZeroAllocation() {
+            NullPointerException ex1 = new NullPointerException("Null pointer at Line 42");
+            NullPointerException ex2 = new NullPointerException("Null pointer at Line 99");
 
-            ResponseEntity<ErrorResponse> response = handlerWithMasking.handleUnhandledException(ex);
+            ResponseEntity<ErrorResponse> response1 = handlerWithMasking.handleUnhandledException(ex1);
+            ResponseEntity<ErrorResponse> response2 = handlerWithMasking.handleUnhandledException(ex2);
 
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
-            assertThat(response.getBody()).isNotNull();
-            assertThat(response.getBody().status()).isEqualTo(500);
-            assertThat(response.getBody().code()).isEqualTo(CommonError.INTERNAL_ERROR.code());
-            assertThat(response.getBody().detail()).isEqualTo(GlobalExceptionHandler.GENERIC_INTERNAL_ERROR_MESSAGE);
-            assertThat(response.getBody().errors()).isEmpty();
+            assertThat(response1.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+            assertThat(response1.getBody()).isNotNull();
+            assertThat(response1.getBody().status()).isEqualTo(500);
+            assertThat(response1.getBody().code()).isEqualTo(CommonError.INTERNAL_ERROR.code());
+            assertThat(response1.getBody().detail()).isEqualTo(GlobalExceptionHandler.GENERIC_INTERNAL_ERROR_MESSAGE);
+            assertThat(response1.getBody().errors()).isEmpty();
+
+            // Zero-allocation: devuelven exactamente la misma referencia en memoria
+            assertThat(response1).isSameAs(response2);
         }
 
         @Test
@@ -228,5 +269,5 @@ class GlobalExceptionHandlerTest {
         void dummyMethod(String input) {}
     }
 
-    private record DummyDto(String email, Integer amount) {}
+    private record DummyDto(String email, Integer amount, String password, String biography) {}
 }

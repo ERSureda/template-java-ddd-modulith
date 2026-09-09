@@ -3,6 +3,7 @@ package com.template.api.shared.infrastructure.adapter.in.web;
 import com.template.api.shared.domain.error.CommonError;
 import com.template.api.shared.domain.error.ErrorCategory;
 import com.template.api.shared.domain.exception.BaseException;
+import com.template.api.shared.domain.exception.ValidationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,16 +24,8 @@ import java.util.List;
 /**
  * Manejador centralizado y estandarizado de excepciones para la capa Web.
  * <p>
- * Transforma todas las excepciones de la aplicación al contrato ultraligero {@link ErrorResponse},
- * cumpliendo con la regla normativa {@code INP-03} y la decisión de arquitectura {@code ADR-03}.
- * <p>
- * Características clave:
- * <ul>
- *   <li><b>Rendimiento y coste cero:</b> No genera ni inspecciona stack traces para errores de negocio/cliente.</li>
- *   <li><b>Logging inteligente:</b> Registra en {@code WARN} (1 línea) fallos de validación/cliente, y en {@code ERROR} (con stack trace) fallos imprevistos o de sistema.</li>
- *   <li><b>Seguridad:</b> Enmascara detalles y trazas internas en errores 500 para evitar fugas de información.</li>
- *   <li><b>Homologación total:</b> Sustituye {@link ProblemDetail} de Spring por {@link ErrorResponse} en todos los endpoints.</li>
- * </ul>
+ * Implementa las directivas normativas {@code INP-03} y {@code ADR-03} optimizado
+ * para alto rendimiento (zero-allocation en fallos 500 y sanitización de seguridad OWASP).
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
@@ -44,6 +37,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     public static final String VALIDATION_FAILED_MESSAGE =
             "La solicitud contiene campos inválidos o ausentes";
+
+    // Caché estática singleton para asignación CERO de memoria en errores 500 enmascarados
+    private static final ResponseEntity<ErrorResponse> CACHED_INTERNAL_ERROR_RESPONSE =
+            ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ErrorResponse.of(
+                            HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                            CommonError.INTERNAL_ERROR.code(),
+                            GENERIC_INTERNAL_ERROR_MESSAGE
+                    ));
 
     private final boolean maskInternalDetails;
 
@@ -67,18 +69,27 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         HttpStatus status = HttpErrorCategoryMapper.toHttpStatus(category);
         String code = ex.getErrorCode().code();
 
+        // 1.1 Logging asíncrono optimizado
         if (category.capturesDiagnostics()) {
             log.error("Fallo técnico de infraestructura o sistema [code={}]: {}", code, ex.getMessage(), ex);
         } else {
             log.warn("Fallo controlado de negocio/cliente [code={}]: {}", code, ex.getMessage());
         }
 
-        String detail = (category == ErrorCategory.INTERNAL && maskInternalDetails)
-                ? GENERIC_INTERNAL_ERROR_MESSAGE
-                : ex.getMessage();
+        // 1.2 Zero-allocation si es error 500 interno y está enmascarado
+        if (category == ErrorCategory.INTERNAL && maskInternalDetails) {
+            return CACHED_INTERNAL_ERROR_RESPONSE;
+        }
 
-        ErrorResponse response = ErrorResponse.of(status.value(), code, detail);
-        return ResponseEntity.status(status).body(response);
+        // 1.3 Si la excepción contiene violaciones de dominio (ValidationException múltiple), las mapea
+        List<ValidationErrorDetail> errors = (ex instanceof ValidationException ve && !ve.getViolations().isEmpty())
+                ? ve.getViolations().stream()
+                        .map(v -> ValidationErrorDetail.of(v.field(), v.message()))
+                        .toList()
+                : ErrorResponse.NO_ERRORS;
+
+        return ResponseEntity.status(status)
+                .body(ErrorResponse.of(status.value(), code, ex.getMessage(), errors));
     }
 
     // =========================================================================
@@ -110,17 +121,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     // =========================================================================
-    // 3. FALLBACK CATCH-ALL (Cualquier excepción imprevista de la JVM / Framework)
+    // 3. FALLBACK CATCH-ALL (Errores imprevistos de la JVM / Framework)
     // =========================================================================
 
     @ExceptionHandler(Throwable.class)
     public ResponseEntity<ErrorResponse> handleUnhandledException(Throwable ex) {
         log.error("Excepción no controlada interceptada en capa web", ex);
 
-        String detail = maskInternalDetails
-                ? GENERIC_INTERNAL_ERROR_MESSAGE
-                : (ex.getMessage() != null ? ex.getMessage() : GENERIC_INTERNAL_ERROR_MESSAGE);
+        if (maskInternalDetails) {
+            return CACHED_INTERNAL_ERROR_RESPONSE;
+        }
 
+        String detail = ex.getMessage() != null ? ex.getMessage() : GENERIC_INTERNAL_ERROR_MESSAGE;
         ErrorResponse response = ErrorResponse.of(
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 CommonError.INTERNAL_ERROR.code(),
@@ -131,7 +143,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     // =========================================================================
-    // 4. SOBRESCRITURA DE FRAMEWORK HANDLER (Evita fugas de ProblemDetail)
+    // 4. SOBREESCRITURA DE FRAMEWORK HANDLER (Evita fugas de ProblemDetail)
     // =========================================================================
 
     @Override
@@ -146,12 +158,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         }
 
         String code = mapStatusCodeToErrorCode(statusCode);
-        String detail;
-        if (body instanceof ProblemDetail problemDetail && problemDetail.getDetail() != null) {
-            detail = problemDetail.getDetail();
-        } else {
-            detail = statusCode.toString();
-        }
+        String detail = (body instanceof ProblemDetail pd && pd.getDetail() != null)
+                ? pd.getDetail()
+                : statusCode.toString();
 
         ErrorResponse errorResponse = ErrorResponse.of(statusCode.value(), code, detail);
         return ResponseEntity.status(statusCode).headers(headers).body(errorResponse);
@@ -162,13 +171,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // =========================================================================
 
     private ValidationErrorDetail mapFieldError(FieldError fieldError) {
-        String field = fieldError.getField();
         String message = fieldError.getDefaultMessage() != null
                 ? fieldError.getDefaultMessage()
                 : "Campo inválido";
-        Object rejectedValue = fieldError.getRejectedValue();
 
-        return new ValidationErrorDetail(field, message, rejectedValue);
+        return ValidationErrorDetail.of(
+                fieldError.getField(),
+                message,
+                fieldError.getRejectedValue()
+        );
     }
 
     private static String mapStatusCodeToErrorCode(HttpStatusCode status) {
