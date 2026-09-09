@@ -6,16 +6,16 @@ import com.template.api.shared.domain.error.ErrorCode;
 
 import java.io.Serial;
 
-public class ValidationException extends BaseException {
+public class ConflictException extends BaseException {
 
     @Serial
     private static final long serialVersionUID = 1L;
 
-    public ValidationException(ErrorCode errorCode, String message) {
-        super(errorCode, ErrorCategory.VALIDATION, message);
+    public ConflictException(ErrorCode errorCode, String message) {
+        super(errorCode, ErrorCategory.CONFLICT, message);
     }
 
-    public ValidationException(String message) {
-        super(CommonError.VALIDATION_ERROR, ErrorCategory.VALIDATION, message);
+    public ConflictException(String message) {
+        super(CommonError.RESOURCE_ALREADY_EXISTS, ErrorCategory.CONFLICT, message);
     }
 }
