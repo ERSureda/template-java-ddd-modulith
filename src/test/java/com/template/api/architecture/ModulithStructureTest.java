@@ -20,6 +20,6 @@ class ModulithStructureTest {
         ApplicationModule sharedModule = modules.getModuleByName("shared")
                 .orElseThrow(() -> new AssertionError("El módulo 'shared' debe ser detectado por Spring Modulith"));
 
-        assertThat(sharedModule.getDisplayName()).isEqualTo("Shared Kernel");
+        assertThat(sharedModule.getDisplayName()).isEqualTo("Shared");
     }
 }
