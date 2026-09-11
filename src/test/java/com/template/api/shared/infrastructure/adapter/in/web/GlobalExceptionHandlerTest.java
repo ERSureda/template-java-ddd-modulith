@@ -138,12 +138,12 @@ class GlobalExceptionHandlerTest {
     }
 
     @Nested
-    @DisplayName("2. Manejo de Bean Validation (@Valid y Sanitización OWASP)")
+    @DisplayName("2. Manejo de Bean Validation (@Valid en @RequestBody)")
     class BeanValidationTests {
 
         @Test
-        @DisplayName("Debe transformar MethodArgumentNotValidException sanitizando campos sensibles (passwords/tokens)")
-        void shouldHandleMethodArgumentNotValidExceptionWithSanitization() throws Exception {
+        @DisplayName("Debe transformar MethodArgumentNotValidException a ErrorResponse con violaciones estandarizadas (field y message)")
+        void shouldHandleMethodArgumentNotValidException() throws Exception {
             Method dummyMethod = DummyController.class.getDeclaredMethod("dummyMethod", String.class);
             MethodParameter parameter = new MethodParameter(dummyMethod, 0);
 
@@ -172,25 +172,22 @@ class GlobalExceptionHandlerTest {
             assertThat(errorResponse.detail()).isEqualTo(GlobalExceptionHandler.VALIDATION_FAILED_MESSAGE);
             assertThat(errorResponse.errors()).hasSize(4);
 
-            // 1. Campo normal con valor nulo
+            // Verificación del contrato minimalista y seguro (no reflejar inputs del usuario)
             ValidationErrorDetail emailError = errorResponse.errors().get(0);
             assertThat(emailError.field()).isEqualTo("email");
-            assertThat(emailError.rejectedValue()).isNull();
+            assertThat(emailError.message()).isEqualTo("Email is mandatory");
 
-            // 2. Campo normal con valor
             ValidationErrorDetail amountError = errorResponse.errors().get(1);
             assertThat(amountError.field()).isEqualTo("amount");
-            assertThat(amountError.rejectedValue()).isEqualTo(-5);
+            assertThat(amountError.message()).isEqualTo("Amount must be positive");
 
-            // 3. Campo sensible sanitizado por regla OWASP (no expone la contraseña)
             ValidationErrorDetail passwordError = errorResponse.errors().get(2);
             assertThat(passwordError.field()).isEqualTo("password");
-            assertThat(passwordError.rejectedValue()).isEqualTo("[PROTECTED]");
+            assertThat(passwordError.message()).isEqualTo("Password too weak");
 
-            // 4. Cadena larga truncada por regla anti-DoS
             ValidationErrorDetail bioError = errorResponse.errors().get(3);
             assertThat(bioError.field()).isEqualTo("biography");
-            assertThat(bioError.rejectedValue().toString()).endsWith("... [truncated]");
+            assertThat(bioError.message()).isEqualTo("Too long");
         }
     }
 

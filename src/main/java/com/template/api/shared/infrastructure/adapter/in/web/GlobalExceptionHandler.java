@@ -46,6 +46,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     private static final String MDC_TRACE_ID_KEY = "traceId";
     private static final String CORRELATION_HEADER_NAME = "X-Correlation-Id";
 
+    private static final ResponseEntity<ErrorResponse> CACHED_INTERNAL_ERROR_RESPONSE =
+            ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
+                    ErrorResponse.of(
+                            HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                            CommonError.INTERNAL_ERROR.code(),
+                            GENERIC_INTERNAL_ERROR_MESSAGE,
+                            null,
+                            List.of()));
+
     private final boolean maskInternalDetails;
 
     public GlobalExceptionHandler() {
@@ -76,12 +85,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         }
 
         if (category == ErrorCategory.INTERNAL && maskInternalDetails) {
-            return buildMaskedInternalResponse(traceId);
+            return CACHED_INTERNAL_ERROR_RESPONSE;
         }
 
         List<ValidationErrorDetail> violations = (ex instanceof ValidationException ve && !ve.getViolations().isEmpty())
                 ? ve.getViolations().stream()
-                .map(v -> new ValidationErrorDetail(v.field(), v.message(), null))
+                .map(v -> new ValidationErrorDetail(v.field(), v.message()))
                 .toList()
                 : List.of();
 
@@ -143,7 +152,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         log.warn("Violación de restricción en parámetros HTTP [traceId={}]: {}", traceId, ex.getMessage());
 
         List<ValidationErrorDetail> violations = ex.getConstraintViolations().stream()
-                .map(v -> new ValidationErrorDetail(v.getPropertyPath().toString(), v.getMessage(), v.getInvalidValue()))
+                .map(v -> new ValidationErrorDetail(v.getPropertyPath().toString(), v.getMessage()))
                 .toList();
 
         ErrorResponse response = ErrorResponse.of(
@@ -167,7 +176,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         log.error("Excepción no controlada interceptada en capa web [traceId={}]", traceId, ex);
 
         if (maskInternalDetails) {
-            return buildMaskedInternalResponse(traceId);
+            return CACHED_INTERNAL_ERROR_RESPONSE;
         }
 
         String detail = ex.getMessage() != null ? ex.getMessage() : GENERIC_INTERNAL_ERROR_MESSAGE;
@@ -220,16 +229,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // MÉTODOS AUXILIARES PRIVADOS
     // =========================================================================
 
-    private ResponseEntity<ErrorResponse> buildMaskedInternalResponse(String traceId) {
-        ErrorResponse response = ErrorResponse.of(
-                HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                CommonError.INTERNAL_ERROR.code(),
-                GENERIC_INTERNAL_ERROR_MESSAGE,
-                traceId
-        );
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
-    }
-
     private String resolveTraceId(WebRequest request) {
         if (request instanceof ServletWebRequest servletWebRequest) {
             return resolveTraceId(servletWebRequest.getRequest());
@@ -258,11 +257,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 ? fieldError.getDefaultMessage()
                 : "Campo inválido";
 
-        return new ValidationErrorDetail(
-                fieldError.getField(),
-                message,
-                fieldError.getRejectedValue()
-        );
+        return new ValidationErrorDetail(fieldError.getField(), message);
     }
 
     private static String mapStatusCodeToErrorCode(HttpStatusCode status) {
