@@ -6,6 +6,12 @@ public abstract class BaseEntity<T> {
 
     protected T id;
 
+    protected BaseEntity() {}
+
+    protected BaseEntity(T id) {
+        this.id = Objects.requireNonNull(id, "id cannot be null");
+    }
+
     public T getId() {
         return id;
     }

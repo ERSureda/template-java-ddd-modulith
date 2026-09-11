@@ -8,7 +8,26 @@ import java.util.Objects;
 
 public abstract class AggregateRoot<T> extends BaseEntity<T> {
 
+    /**
+     * Versión opaca para control de concurrencia optimista (TRX-02).
+     * Null en entidades nuevas aún no persistidas en base de datos.
+     */
+    protected Long version;
+
     private final transient List<DomainEvent> domainEvents = new ArrayList<>();
+
+    protected AggregateRoot() {
+        super();
+    }
+
+    protected AggregateRoot(T id, Long version) {
+        super(id);
+        this.version = version;
+    }
+
+    public Long getVersion() {
+        return version;
+    }
 
     public boolean hasDomainEvents() {
         return !this.domainEvents.isEmpty();
