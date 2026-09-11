@@ -4,8 +4,11 @@ import com.template.api.shared.domain.error.CommonError;
 import com.template.api.shared.domain.error.ErrorCategory;
 import com.template.api.shared.domain.exception.BaseException;
 import com.template.api.shared.domain.exception.ValidationException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -16,17 +19,13 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import java.util.List;
+import java.util.UUID;
 
-/**
- * Manejador centralizado y estandarizado de excepciones para la capa Web.
- * <p>
- * Implementa las directivas normativas {@code INP-03} y {@code ADR-03} optimizado
- * para alto rendimiento (zero-allocation en fallos 500 y sanitización de seguridad OWASP).
- */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
@@ -38,20 +37,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public static final String VALIDATION_FAILED_MESSAGE =
             "La solicitud contiene campos inválidos o ausentes";
 
-    // Caché estática singleton para asignación CERO de memoria en errores 500 enmascarados
-    private static final ResponseEntity<ErrorResponse> CACHED_INTERNAL_ERROR_RESPONSE =
-            ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ErrorResponse.of(
-                            HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                            CommonError.INTERNAL_ERROR.code(),
-                            GENERIC_INTERNAL_ERROR_MESSAGE
-                    ));
-
     private final boolean maskInternalDetails;
-
-    public GlobalExceptionHandler() {
-        this(true);
-    }
 
     public GlobalExceptionHandler(
             @Value("${application.errors.mask-internal-details:true}") boolean maskInternalDetails
@@ -64,32 +50,30 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // =========================================================================
 
     @ExceptionHandler(BaseException.class)
-    public ResponseEntity<ErrorResponse> handleBaseException(BaseException ex) {
+    public ResponseEntity<ErrorResponse> handleBaseException(BaseException ex, HttpServletRequest request) {
         ErrorCategory category = ex.getCategory();
         HttpStatus status = HttpErrorCategoryMapper.toHttpStatus(category);
         String code = ex.getErrorCode().code();
+        String traceId = resolveTraceId(request);
 
-        // 1.1 Logging asíncrono optimizado
         if (category.capturesDiagnostics()) {
-            log.error("Fallo técnico de infraestructura o sistema [code={}]: {}", code, ex.getMessage(), ex);
+            log.error("Fallo técnico [traceId={}, code={}]: {}", traceId, code, ex.getMessage(), ex);
         } else {
-            log.warn("Fallo controlado de negocio/cliente [code={}]: {}", code, ex.getMessage());
+            log.warn("Fallo controlado [traceId={}, code={}]: {}", traceId, code, ex.getMessage());
         }
 
-        // 1.2 Zero-allocation si es error 500 interno y está enmascarado
         if (category == ErrorCategory.INTERNAL && maskInternalDetails) {
-            return CACHED_INTERNAL_ERROR_RESPONSE;
+            return buildMaskedInternalResponse(traceId);
         }
 
-        // 1.3 Si la excepción contiene violaciones de dominio (ValidationException múltiple), las mapea
         List<ValidationErrorDetail> errors = (ex instanceof ValidationException ve && !ve.getViolations().isEmpty())
                 ? ve.getViolations().stream()
-                        .map(v -> ValidationErrorDetail.of(v.field(), v.message()))
-                        .toList()
+                .map(v -> ValidationErrorDetail.of(v.field(), v.message()))
+                .toList()
                 : ErrorResponse.NO_ERRORS;
 
         return ResponseEntity.status(status)
-                .body(ErrorResponse.of(status.value(), code, ex.getMessage(), errors));
+                .body(ErrorResponse.of(status.value(), code, ex.getMessage(), traceId, errors));
     }
 
     // =========================================================================
@@ -103,8 +87,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             HttpStatusCode status,
             WebRequest request
     ) {
-        log.warn("Solicitud HTTP rechazada por validación de campos: {} errores detectados",
-                ex.getBindingResult().getFieldErrorCount());
+        String traceId = resolveTraceId(request);
+        log.warn("Solicitud rechazada por validación de campos [traceId={}]: {} errores",
+                traceId, ex.getBindingResult().getFieldErrorCount());
 
         List<ValidationErrorDetail> errors = ex.getBindingResult().getFieldErrors().stream()
                 .map(this::mapFieldError)
@@ -114,6 +99,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 HttpStatus.BAD_REQUEST.value(),
                 CommonError.VALIDATION_ERROR.code(),
                 VALIDATION_FAILED_MESSAGE,
+                traceId,
                 errors
         );
 
@@ -121,29 +107,59 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     // =========================================================================
-    // 3. FALLBACK CATCH-ALL (Errores imprevistos de la JVM / Framework)
+    // 3. VALIDACIÓN DE PARÁMETROS URI / QUERY STRING (@RequestParam / @PathVariable)
+    // =========================================================================
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ErrorResponse> handleConstraintViolation(
+            ConstraintViolationException ex,
+            HttpServletRequest request
+    ) {
+        String traceId = resolveTraceId(request);
+        log.warn("Violación de restricción en parámetros HTTP [traceId={}]: {}", traceId, ex.getMessage());
+
+        List<ValidationErrorDetail> errors = ex.getConstraintViolations().stream()
+                .map(v -> ValidationErrorDetail.of(v.getPropertyPath().toString(), v.getMessage(), v.getInvalidValue()))
+                .toList();
+
+        ErrorResponse response = ErrorResponse.of(
+                HttpStatus.BAD_REQUEST.value(),
+                CommonError.VALIDATION_ERROR.code(),
+                VALIDATION_FAILED_MESSAGE,
+                traceId,
+                errors
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+    }
+
+    // =========================================================================
+    // 4. FALLBACK CATCH-ALL (Errores imprevistos de la JVM / Framework)
     // =========================================================================
 
     @ExceptionHandler(Throwable.class)
-    public ResponseEntity<ErrorResponse> handleUnhandledException(Throwable ex) {
-        log.error("Excepción no controlada interceptada en capa web", ex);
+    public ResponseEntity<ErrorResponse> handleUnhandledException(Throwable ex, HttpServletRequest request) {
+        String traceId = resolveTraceId(request);
+        log.error("Excepción no controlada interceptada en capa web [traceId={}]", traceId, ex);
 
         if (maskInternalDetails) {
-            return CACHED_INTERNAL_ERROR_RESPONSE;
+            return buildMaskedInternalResponse(traceId);
         }
 
         String detail = ex.getMessage() != null ? ex.getMessage() : GENERIC_INTERNAL_ERROR_MESSAGE;
         ErrorResponse response = ErrorResponse.of(
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 CommonError.INTERNAL_ERROR.code(),
-                detail
+                detail,
+                traceId,
+                ErrorResponse.NO_ERRORS
         );
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
     }
 
     // =========================================================================
-    // 4. SOBREESCRITURA DE FRAMEWORK HANDLER (Evita fugas de ProblemDetail)
+    // 5. SOBREESCRITURA DE FRAMEWORK HANDLER (Evita fugas de ProblemDetail)
     // =========================================================================
 
     @Override
@@ -157,18 +173,60 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             return ResponseEntity.status(statusCode).headers(headers).body(body);
         }
 
+        String traceId = resolveTraceId(request);
         String code = mapStatusCodeToErrorCode(statusCode);
         String detail = (body instanceof ProblemDetail pd && pd.getDetail() != null)
                 ? pd.getDetail()
                 : statusCode.toString();
 
-        ErrorResponse errorResponse = ErrorResponse.of(statusCode.value(), code, detail);
+        ErrorResponse errorResponse = ErrorResponse.of(
+                statusCode.value(),
+                code,
+                detail,
+                traceId,
+                ErrorResponse.NO_ERRORS
+        );
+
         return ResponseEntity.status(statusCode).headers(headers).body(errorResponse);
     }
 
     // =========================================================================
-    // MÉTODOS AUXILIARES PRIVADOS
+    // MÉTODOS AUXILIARES
     // =========================================================================
+
+    private ResponseEntity<ErrorResponse> buildMaskedInternalResponse(String traceId) {
+        ErrorResponse response = ErrorResponse.of(
+                HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                CommonError.INTERNAL_ERROR.code(),
+                GENERIC_INTERNAL_ERROR_MESSAGE,
+                traceId,
+                ErrorResponse.NO_ERRORS
+        );
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+    }
+
+    private String resolveTraceId(WebRequest request) {
+        if (request instanceof ServletWebRequest swr) {
+            return resolveTraceId(swr.getRequest());
+        }
+        return resolveTraceId((HttpServletRequest) null);
+    }
+
+    private String resolveTraceId(HttpServletRequest request) {
+        String traceId = MDC.get("traceId");
+        if (traceId != null && !traceId.isBlank()) {
+            return traceId;
+        }
+
+        if (request != null) {
+            String headerTraceId = request.getHeader("X-Correlation-Id");
+            if (headerTraceId != null && !headerTraceId.isBlank()) {
+                return headerTraceId;
+            }
+        }
+
+        return UUID.randomUUID().toString();
+    }
 
     private ValidationErrorDetail mapFieldError(FieldError fieldError) {
         String message = fieldError.getDefaultMessage() != null
