@@ -48,7 +48,7 @@ Configurado bajo el paquete `<namespace.base>.shared` y declarado formalmente co
 
 * **`ExecutionContext`:** Record inmutable que transporta el contexto de la petición: `tenantId` (UUID), `userId` (UUID), `roles` (Set) y `correlationId` (String).
 * **`ExecutionContextHolder`:** Portador estático desacoplado, seguro frente a la concurrencia masiva de Virtual Threads en Java 25.
-* **`CommandValidator`:** Validador fluido acumulativo que procesa reglas sintácticas y precondiciones sobre los records de comando antes de invocar la lógica, acumulando fallos para responder en bloque.
+* **Comandos y Consultas Híbridos:** Comandos exclusivos Web y Consultas (`Query`) definidos como records planos sin validación interna (apoyados en `@Valid` web); comandos multicanal (colas Kafka/RabbitMQ, eventos, schedulers) con validación defensiva inmediata fail-fast (`Objects.requireNonNull`).
 * **`PageResult<T>`:** Record inmutable transversal para respuestas paginadas: `items` (List), `page` (int), `size` (int), `totalElements` (long) y `totalPages` (int).
 * **Puertos Secundarios Transversales (`shared.application.port`):**
   * `UuidGeneratorPort`: Contrato para la generación de identificadores basados en tiempo UUIDv7.
@@ -234,10 +234,10 @@ El repositorio semilla incluye un Bounded Context funcional mínimo de referenci
 
 * **Aplicación (`<namespace.base>.<subdominio>.application`):**
   * Archivo `package-info.java` anotado con `@NamedInterface("application")`.
-  * Comando inmutable validado con `CommandValidator`.
+  * Comando inmutable de escritura (record plano para casos de uso exclusivos Web; con validación fail-fast `Objects.requireNonNull` si es multicanal).
   * Interfaz de caso de uso (`*UseCase`) implementada en un `@Service` con demarcación `@Transactional`.
   * Puerto de salida para persistencia (`*RepositoryPort`).
-  * Caso de uso de lectura (`*Query`) optimizado con `@Transactional(readOnly = true)`.
+  * Consulta inmutable de lectura (`*Query`) definida como record plano de una sola línea optimizada con `@Transactional(readOnly = true)`.
 
 * **Infraestructura (`<namespace.base>.<subdominio>.infrastructure`):**
   * Adaptador JPA: `@Entity` dedicada, repositorio Spring Data y mapper explícito bidireccional.

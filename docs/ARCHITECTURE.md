@@ -44,7 +44,6 @@ src/main/java/<namespace.base>/
 │   │   └── exception/                      # Jerarquía base de errores (BaseException, ErrorCode, ErrorCategory)
 │   ├── application/
 │   │   ├── context/                        # ExecutionContext inmutable y puertos de contexto
-│   │   ├── validation/                     # CommandValidator (validación acumulativa y fluida)
 │   │   ├── result/                         # Result wrappers transversales (PageResult)
 │   │   └── port/                           # Puertos transversales (UuidGeneratorPort, OutboxPublisherPort...)
 │   └── infrastructure/
@@ -61,8 +60,8 @@ src/main/java/<namespace.base>/
     │
     ├── application/                        # API PÚBLICA DEL MÓDULO (@NamedInterface("application"))
     │   ├── package-info.java               # Declara la interfaz pública nombrada para otros módulos
-    │   ├── command/                        # Comandos de escritura (Records inmutables con autovalidación)
-    │   ├── query/                          # Consultas de lectura (Records inmutables de parámetros y filtros)
+    │   ├── command/                        # Comandos de escritura (Records planos para Web; fail-fast si son multicanal)
+    │   ├── query/                          # Consultas de lectura (Records planos de parámetros y filtros)
     │   ├── port/
     │   │   ├── in/                         # Casos de uso / interfaces primarias (*UseCase)
     │   │   └── out/                        # Puertos secundarios (repositorios y gateways externos)
@@ -119,7 +118,7 @@ Cuando se produce una modificación en el sistema, **es obligatorio hidratar el 
       │
       ▼
 1. [Adapter IN (Controller)]  ──► Valida payload sintáctico (@Valid). 
-      │                           Mapea Request a Command inmutable (autovalidado con CommandValidator).
+      │                           Mapea Request a Command inmutable (record plano sin validación interna redundante).
       ▼
 2. [Application (Service)]    ──► Abre @Transactional. 
       │                           Carga e hidrata el Agregado de Dominio invocando application/port/out.
@@ -145,7 +144,7 @@ Cuando se consultan datos para mostrarlos en pantallas o APIs, **queda prohibido
 [Cliente HTTP]
       │
       ▼
-1. [Adapter IN (Controller)]  ──► Mapea parámetros de búsqueda y paginación a un objeto Query inmutable.
+1. [Adapter IN (Controller)]  ──► Mapea parámetros de búsqueda y paginación a un objeto Query plano (sin validación interna).
       │
       ▼
 2. [Application (Service)]    ──► Ejecuta caso de uso bajo @Transactional(readOnly = true).
@@ -186,7 +185,11 @@ Cuando se consultan datos para mostrarlos en pantallas o APIs, **queda prohibido
 
 * **`APP-01 · MUST` [A]** Cada caso de uso debe representarse como una interfaz en `application/port/in` con el sufijo `UseCase` y un único método público de ejecución (`execute`), implementada en una clase `@Service` en `application/service` con el sufijo `Service`.
 * **`APP-02 · NEVER` [A]** La capa de aplicación contendrá lógica de cálculo de negocio o validación de invariantes de dominio; su función se limita estrictamente a la orquestación técnica del flujo.
-* **`APP-03 · MUST` [R]** La entrada a un caso de uso debe ser un Comando/Query inmutable (validado con `CommandValidator`). La salida debe ser un DTO plano de aplicación (`*Result`) o el lanzamiento de una excepción tipada de coste cero (`BaseException`).
+* **`APP-03 · MUST` [R]** La entrada a un caso de uso debe ser un Comando o Query inmutable bajo el siguiente modelo híbrido:
+  * **Comandos exclusivamente Web:** Si el comando se consume únicamente a través de una petición HTTP, debe definirse como un `record` plano sin lógica de validación interna, delegando el control previo en las anotaciones `@Valid` del `HttpRequest` en la capa Web.
+  * **Comandos no exclusivos de Web (multicanal):** Si el comando puede ser invocado desde orígenes no exclusivos de HTTP (colas de mensajería como Kafka/RabbitMQ, eventos de dominio o tareas programadas/schedulers), debe implementar comprobaciones defensivas de no-nulidad de forma inmediata (*fail-fast* con *zero-allocation* mediante `Objects.requireNonNull` en su constructor compacto nativo).
+  * **Queries (lectura):** Se definen siempre como `record` planos sin lógica de validación interna.
+  La salida de un caso de uso debe ser un DTO plano de aplicación (`*Result`) o el lanzamiento de una excepción tipada de coste cero (`BaseException`).
 * **`APP-04 · NEVER` [A]** Un caso de uso devolverá agregados de dominio o entidades de base de datos hacia los adaptadores primarios o hacia otros módulos.
 
 ---
@@ -259,6 +262,8 @@ La integridad de este manual se respalda mediante pruebas automáticas que bloqu
 | **Entidad JPA usada como Agregado** | El ORM invade el dominio, obligando a constructores por defecto y acoplando el negocio a la tabla SQL. | Separar Agregado de Dominio de la entidad JPA mediante un Mapper explícito bidireccional. | `DOM-01`, `OUT-01` |
 | **Lógica de negocio en el Caso de Uso** | El caso de uso se transforma en un procedimiento monolítico y el dominio queda desprovisto de lógica. | Mover las reglas de cálculo e invariantes al interior del Agregado de dominio. | `APP-02` |
 | **Duplicación redundante de Enums en Web** | Crear enums idénticos en la web solo para aislar el dominio multiplica el boilerplate sin aportar valor. | Permitir el uso directo de enums de estado inmutables del dominio en controladores REST locales. | `INP-01` |
+| **Doble validación en Comandos exclusivos Web** | Revalidar en el Command datos que ya garantizó Bean Validation (@Valid) en el HttpRequest genera duplicación innecesaria de código. | Definir los comandos exclusivos de HTTP como records planos sin validación interna. | `APP-03`, `ADR-06` |
+| **Comando Multicanal sin validación fail-fast** | Permitir que peticiones defectuosas desde colas (Kafka) o schedulers lleguen al dominio o abran transacciones sin haber sido validadas. | Implementar validación fail-fast nativa (Objects.requireNonNull) en el constructor compacto de comandos multicanal. | `APP-03`, `ADR-06` |
 
 ---
 
@@ -266,6 +271,7 @@ La integridad de este manual se respalda mediante pruebas automáticas que bloqu
 
 * [ ] ¿Las fronteras del módulo se respetan sin invadir paquetes internos de otros módulos? (`ARC-02`)
 * [ ] ¿El paquete `application` expone su contrato mediante `package-info.java` con `@NamedInterface("application")`? (`ARC-01`)
+* [ ] ¿Los Comandos exclusivos de HTTP son records planos sin validación interna, y los Comandos multicanal (colas, schedulers) tienen validación fail-fast (`Objects.requireNonNull`)? (`APP-03`, `ADR-06`)
 * [ ] ¿El Agregado protege sus invariantes sin exponer métodos mutadores (`setters`) públicos? (`DOM-04`)
 * [ ] ¿El caso de uso orquesta el flujo sin absorber reglas de cálculo que corresponden al Agregado? (`APP-02`)
 * [ ] ¿Cada implementación en `application/service` implementa exactamente un `*UseCase` y termina en `Service`? (`APP-01`)
@@ -308,3 +314,15 @@ La integridad de este manual se respalda mediante pruebas automáticas que bloqu
 * **Decisión:** Permitir que los adaptadores de entrada (controladores REST y mappers web) importen y consuman directamente los enums inmutables de estado definidos en `domain.model.enums.*` del propio módulo. Si el enum trasciende las fronteras del módulo, debe exponerse en el paquete `application` de la `@NamedInterface`.
 * **Alternativa descartada:** Crear enums duplicados idénticos en la capa web con mappers intermedios en cada endpoint.
 * **Motivo técnico:** Evitar la proliferación de código redundante (*boilerplate*) sin valor funcional, garantizando al mismo tiempo que Modulith verifique limpiamente las referencias intermodulares.
+
+### `ADR-06`: Validación Híbrida en Comandos (Exclusivos Web vs. Multicanal)
+
+* **Decisión:** 
+  1. **Comandos exclusivamente Web:** Si un comando se utiliza únicamente desde peticiones HTTP, se define como un `record` plano sin lógica de validación interna, ya que los datos son validados previamente en el controlador web mediante Bean Validation (`@Valid`).
+  2. **Comandos no exclusivos de Web (Multicanal):** Si un comando no tiene acceso exclusivo por HTTP y puede ser invocado desde otros canales (colas de mensajería como Kafka/RabbitMQ, eventos de dominio o tareas programadas/schedulers), debe implementar validación defensiva inmediata (*fail-fast*) de no-nulidad en su constructor compacto nativo mediante `Objects.requireNonNull`.
+  3. **Consultas (`Query`):** Se definen siempre como `record` planos sin lógica de validación interna.
+* **Alternativa descartada:** Aplicar validación defensiva duplicada en comandos que únicamente se consumen desde la web, o permitir comandos sin validación en canales asíncronos que no pasan por validación HTTP.
+* **Motivo técnico:**
+  1. **Eliminación de validación redundante:** En endpoints exclusivamente Web, la petición ya ha superado el filtro `@Valid` en el controlador; revalidar en el Command genera duplicación innecesaria de código.
+  2. **Protección fail-fast en canales asíncronos:** Los mensajes provenientes de colas (Kafka/RabbitMQ), eventos o schedulers no cuentan con la validación de la capa Web; la comprobación inmediata en el constructor compacto (`Objects.requireNonNull`) asegura que peticiones defectuosas se detengan antes de alcanzar el dominio o abrir transacciones de base de datos.
+  3. **Eficiencia (Zero-Allocation) y simplicidad:** Utiliza métodos nativos de la JVM (`Objects.requireNonNull`) sin crear objetos auxiliares en memoria y mantiene los records exclusivamente web como estructuras mínimas y legibles.
