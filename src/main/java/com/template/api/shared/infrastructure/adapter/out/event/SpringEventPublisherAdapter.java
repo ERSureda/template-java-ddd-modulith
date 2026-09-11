@@ -2,17 +2,20 @@ package com.template.api.shared.infrastructure.adapter.out.event;
 
 import com.template.api.shared.application.port.out.EventPublisherPort;
 import com.template.api.shared.domain.event.DomainEvent;
-import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Objects;
 
 @Component
-@RequiredArgsConstructor
 public class SpringEventPublisherAdapter implements EventPublisherPort {
 
     private final ApplicationEventPublisher eventPublisher;
+
+    public SpringEventPublisherAdapter(ApplicationEventPublisher eventPublisher) {
+        this.eventPublisher = Objects.requireNonNull(eventPublisher, "EVENT_PUBLISHER.NOT_NULL");
+    }
 
     @Override
     public void publish(DomainEvent event) {
