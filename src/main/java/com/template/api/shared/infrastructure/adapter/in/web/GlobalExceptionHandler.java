@@ -26,6 +26,12 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Adaptador de entrada web centralizado para la captura y estandarización de excepciones.
+ * <p>
+ * Transforma fallos de dominio, validaciones de Bean Validation y excepciones nativas
+ * del framework MVC a un modelo homogéneo {@link ErrorResponse} con trazabilidad distribuida.
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
@@ -37,7 +43,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public static final String VALIDATION_FAILED_MESSAGE =
             "La solicitud contiene campos inválidos o ausentes";
 
+    private static final String MDC_TRACE_ID_KEY = "traceId";
+    private static final String CORRELATION_HEADER_NAME = "X-Correlation-Id";
+
     private final boolean maskInternalDetails;
+
+    public GlobalExceptionHandler() {
+        this(true);
+    }
 
     public GlobalExceptionHandler(
             @Value("${application.errors.mask-internal-details:true}") boolean maskInternalDetails
@@ -46,7 +59,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     // =========================================================================
-    // 1. EXCEPCIONES DE DOMINIO Y NEGOCIO (BaseException y subclases)
+    // 1. EXCEPCIONES DE DOMINIO Y REGLAS DE NEGOCIO (BaseException)
     // =========================================================================
 
     @ExceptionHandler(BaseException.class)
@@ -57,27 +70,38 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         String traceId = resolveTraceId(request);
 
         if (category.capturesDiagnostics()) {
-            log.error("Fallo técnico [traceId={}, code={}]: {}", traceId, code, ex.getMessage(), ex);
+            log.error("Fallo técnico de infraestructura o sistema [traceId={}, code={}]: {}", traceId, code, ex.getMessage(), ex);
         } else {
-            log.warn("Fallo controlado [traceId={}, code={}]: {}", traceId, code, ex.getMessage());
+            log.warn("Fallo controlado de regla de dominio [traceId={}, code={}]: {}", traceId, code, ex.getMessage());
         }
 
         if (category == ErrorCategory.INTERNAL && maskInternalDetails) {
             return buildMaskedInternalResponse(traceId);
         }
 
-        List<ValidationErrorDetail> errors = (ex instanceof ValidationException ve && !ve.getViolations().isEmpty())
+        List<ValidationErrorDetail> violations = (ex instanceof ValidationException ve && !ve.getViolations().isEmpty())
                 ? ve.getViolations().stream()
-                .map(v -> ValidationErrorDetail.of(v.field(), v.message()))
+                .map(v -> new ValidationErrorDetail(v.field(), v.message(), null))
                 .toList()
-                : ErrorResponse.NO_ERRORS;
+                : List.of();
 
-        return ResponseEntity.status(status)
-                .body(ErrorResponse.of(status.value(), code, ex.getMessage(), traceId, errors));
+        ErrorResponse response = ErrorResponse.of(
+                status.value(),
+                code,
+                ex.getMessage(),
+                traceId,
+                violations
+        );
+
+        return ResponseEntity.status(status).body(response);
+    }
+
+    public ResponseEntity<ErrorResponse> handleBaseException(BaseException ex) {
+        return handleBaseException(ex, null);
     }
 
     // =========================================================================
-    // 2. ERRORES DE BEAN VALIDATION (@Valid en DTOs y Requests)
+    // 2. VALIDACIÓN DE PAYLOAD HTTP (@Valid / @Validated en @RequestBody)
     // =========================================================================
 
     @Override
@@ -88,10 +112,10 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             WebRequest request
     ) {
         String traceId = resolveTraceId(request);
-        log.warn("Solicitud rechazada por validación de campos [traceId={}]: {} errores",
+        log.warn("Solicitud rechazada por validación de payload [traceId={}]: {} violaciones detectadas",
                 traceId, ex.getBindingResult().getFieldErrorCount());
 
-        List<ValidationErrorDetail> errors = ex.getBindingResult().getFieldErrors().stream()
+        List<ValidationErrorDetail> violations = ex.getBindingResult().getFieldErrors().stream()
                 .map(this::mapFieldError)
                 .toList();
 
@@ -100,14 +124,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 CommonError.VALIDATION_ERROR.code(),
                 VALIDATION_FAILED_MESSAGE,
                 traceId,
-                errors
+                violations
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).headers(headers).body(response);
     }
 
     // =========================================================================
-    // 3. VALIDACIÓN DE PARÁMETROS URI / QUERY STRING (@RequestParam / @PathVariable)
+    // 3. VALIDACIÓN DE PARÁMETROS (@PathVariable / @RequestParam)
     // =========================================================================
 
     @ExceptionHandler(ConstraintViolationException.class)
@@ -118,8 +142,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         String traceId = resolveTraceId(request);
         log.warn("Violación de restricción en parámetros HTTP [traceId={}]: {}", traceId, ex.getMessage());
 
-        List<ValidationErrorDetail> errors = ex.getConstraintViolations().stream()
-                .map(v -> ValidationErrorDetail.of(v.getPropertyPath().toString(), v.getMessage(), v.getInvalidValue()))
+        List<ValidationErrorDetail> violations = ex.getConstraintViolations().stream()
+                .map(v -> new ValidationErrorDetail(v.getPropertyPath().toString(), v.getMessage(), v.getInvalidValue()))
                 .toList();
 
         ErrorResponse response = ErrorResponse.of(
@@ -127,14 +151,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 CommonError.VALIDATION_ERROR.code(),
                 VALIDATION_FAILED_MESSAGE,
                 traceId,
-                errors
+                violations
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
     }
 
     // =========================================================================
-    // 4. FALLBACK CATCH-ALL (Errores imprevistos de la JVM / Framework)
+    // 4. FALLBACK CATCH-ALL (Excepciones imprevistas no controladas)
     // =========================================================================
 
     @ExceptionHandler(Throwable.class)
@@ -151,15 +175,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 CommonError.INTERNAL_ERROR.code(),
                 detail,
-                traceId,
-                ErrorResponse.NO_ERRORS
+                traceId
         );
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
     }
 
+    public ResponseEntity<ErrorResponse> handleUnhandledException(Throwable ex) {
+        return handleUnhandledException(ex, null);
+    }
+
     // =========================================================================
-    // 5. SOBREESCRITURA DE FRAMEWORK HANDLER (Evita fugas de ProblemDetail)
+    // 5. SOBREESCRITURA CENTRALIZADA DE SPRING MVC (404, 405, 415, Malformed JSON)
     // =========================================================================
 
     @Override
@@ -183,15 +210,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 statusCode.value(),
                 code,
                 detail,
-                traceId,
-                ErrorResponse.NO_ERRORS
+                traceId
         );
 
         return ResponseEntity.status(statusCode).headers(headers).body(errorResponse);
     }
 
     // =========================================================================
-    // MÉTODOS AUXILIARES
+    // MÉTODOS AUXILIARES PRIVADOS
     // =========================================================================
 
     private ResponseEntity<ErrorResponse> buildMaskedInternalResponse(String traceId) {
@@ -199,27 +225,26 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 CommonError.INTERNAL_ERROR.code(),
                 GENERIC_INTERNAL_ERROR_MESSAGE,
-                traceId,
-                ErrorResponse.NO_ERRORS
+                traceId
         );
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
     }
 
     private String resolveTraceId(WebRequest request) {
-        if (request instanceof ServletWebRequest swr) {
-            return resolveTraceId(swr.getRequest());
+        if (request instanceof ServletWebRequest servletWebRequest) {
+            return resolveTraceId(servletWebRequest.getRequest());
         }
         return resolveTraceId((HttpServletRequest) null);
     }
 
     private String resolveTraceId(HttpServletRequest request) {
-        String traceId = MDC.get("traceId");
+        String traceId = MDC.get(MDC_TRACE_ID_KEY);
         if (traceId != null && !traceId.isBlank()) {
             return traceId;
         }
 
         if (request != null) {
-            String headerTraceId = request.getHeader("X-Correlation-Id");
+            String headerTraceId = request.getHeader(CORRELATION_HEADER_NAME);
             if (headerTraceId != null && !headerTraceId.isBlank()) {
                 return headerTraceId;
             }
@@ -233,7 +258,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 ? fieldError.getDefaultMessage()
                 : "Campo inválido";
 
-        return ValidationErrorDetail.of(
+        return new ValidationErrorDetail(
                 fieldError.getField(),
                 message,
                 fieldError.getRejectedValue()
