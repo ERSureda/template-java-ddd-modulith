@@ -1,11 +1,13 @@
 package com.template.api.shared.infrastructure.adapter.in.web;
 
+import com.template.api.shared.application.context.ExecutionContext;
 import com.template.api.shared.domain.error.CommonError;
 import com.template.api.shared.domain.error.FieldViolation;
 import com.template.api.shared.domain.exception.ConflictException;
 import com.template.api.shared.domain.exception.InfrastructureException;
 import com.template.api.shared.domain.exception.ResourceNotFoundException;
 import com.template.api.shared.domain.exception.ValidationException;
+import com.template.api.shared.infrastructure.context.ExecutionContextHolder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -47,6 +49,21 @@ class GlobalExceptionHandlerTest {
             assertThat(response.getBody().code()).isEqualTo(CommonError.RESOURCE_NOT_FOUND.code());
             assertThat(response.getBody().detail()).isEqualTo("Customer with ID 123 not found");
             assertThat(response.getBody().errors()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Debe propagar correlationId de ExecutionContext en ErrorResponse")
+        void shouldPropagateCorrelationIdFromExecutionContext() {
+            ExecutionContextHolder.set(ExecutionContext.anonymous("corr-custom-999"));
+            try {
+                ResourceNotFoundException ex = new ResourceNotFoundException("Not found");
+                ResponseEntity<ErrorResponse> response = handlerWithMasking.handleBaseException(ex);
+
+                assertThat(response.getBody()).isNotNull();
+                assertThat(response.getBody().traceId()).isEqualTo("corr-custom-999");
+            } finally {
+                ExecutionContextHolder.clear();
+            }
         }
 
         @Test

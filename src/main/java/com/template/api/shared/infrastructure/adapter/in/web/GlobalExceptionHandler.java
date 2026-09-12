@@ -1,9 +1,11 @@
 package com.template.api.shared.infrastructure.adapter.in.web;
 
+import com.template.api.shared.application.context.ExecutionContext;
 import com.template.api.shared.domain.error.CommonError;
 import com.template.api.shared.domain.error.ErrorCategory;
 import com.template.api.shared.domain.exception.BaseException;
 import com.template.api.shared.domain.exception.ValidationException;
+import com.template.api.shared.infrastructure.context.ExecutionContextHolder;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -44,7 +46,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             "La solicitud contiene campos inválidos o ausentes";
 
     private static final String MDC_TRACE_ID_KEY = "traceId";
-    private static final String CORRELATION_HEADER_NAME = "X-Correlation-Id";
 
     private static final ResponseEntity<ErrorResponse> CACHED_INTERNAL_ERROR_RESPONSE =
             ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
@@ -237,18 +238,33 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     private String resolveTraceId(HttpServletRequest request) {
+        // 1. Contexto de ejecucion propagado (SHR-03)
+        var contextCorrelationId = ExecutionContextHolder.get()
+                .map(ExecutionContext::correlationId);
+        if (contextCorrelationId.isPresent()) {
+            return contextCorrelationId.get();
+        }
+
+        // 2. MDC (correlationId inyectado por ExecutionContextFilter o traceId)
+        String mdcCorrelationId = MDC.get("correlationId");
+        if (mdcCorrelationId != null && !mdcCorrelationId.isBlank()) {
+            return mdcCorrelationId;
+        }
+
         String traceId = MDC.get(MDC_TRACE_ID_KEY);
         if (traceId != null && !traceId.isBlank()) {
             return traceId;
         }
 
+        // 3. Cabecera HTTP
         if (request != null) {
-            String headerTraceId = request.getHeader(CORRELATION_HEADER_NAME);
+            String headerTraceId = request.getHeader(ApiHeaders.CORRELATION_ID);
             if (headerTraceId != null && !headerTraceId.isBlank()) {
                 return headerTraceId;
             }
         }
 
+        // 4. Fallback autogenerado
         return UUID.randomUUID().toString();
     }
 

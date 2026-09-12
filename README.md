@@ -10,10 +10,10 @@ Plantilla base y semilla para el desarrollo de servicios backend en Java utiliza
 * **Framework:** Spring Boot & Spring Modulith
 * **Persistencia:** Persistencia Híbrida (Spring Data JPA + PostgreSQL 17 / JDBC nativo)
 * **Migraciones de BD:** Flyway
-* **Caché / Mensajería In-Memory:** AWS Valkey / Redis
-* **Cloud SDK:** AWS SDK v2 (DynamoDB, S3, KMS)
 * **Mapeo:** MapStruct
-* **Validación Arquitectural & Tests:** Spring Modulith Verification, ArchUnit, Testcontainers, JUnit 5
+* **Documentación OpenAPI:** SpringDoc OpenAPI / Swagger UI
+* **Trazabilidad & Contexto:** ExecutionContext inmutable, MDC, Gateway Authentication Offloading
+* **Validación Arquitectural & Tests:** Spring Modulith Verification & Documenter, ArchUnit, Testcontainers, JUnit 5
 
 ---
 

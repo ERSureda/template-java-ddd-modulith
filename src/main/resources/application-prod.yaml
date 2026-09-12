@@ -1,4 +1,4 @@
-﻿spring:
+spring:
   datasource:
     url: ${SPRING_DATASOURCE_URL}
     username: ${SPRING_DATASOURCE_USERNAME}
@@ -25,7 +25,7 @@
           order_inserts: true
           order_updates: true
   flyway:
-    enabled: ${FLYWAY_ENABLED}
+    enabled: ${FLYWAY_ENABLED:true}
     baseline-on-migrate: false
     validate-on-migrate: true
 
