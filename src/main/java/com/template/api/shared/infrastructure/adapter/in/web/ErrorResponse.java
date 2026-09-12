@@ -4,19 +4,18 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.List;
 
-@JsonInclude(JsonInclude.Include.NON_EMPTY)
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record ErrorResponse(
         int status,
         String code,
         String detail,
-        String traceId,
         List<ValidationErrorDetail> errors
 ) {
-    public static ErrorResponse of(int status, String code, String detail, String traceId, List<ValidationErrorDetail> errors) {
-        return new ErrorResponse(status, code, detail, traceId, errors);
+    public static ErrorResponse of(int status, String code, String detail, List<ValidationErrorDetail> errors) {
+        return new ErrorResponse(status, code, detail, errors);
     }
 
-    public static ErrorResponse of(int status, String code, String detail, String traceId) {
-        return new ErrorResponse(status, code, detail, traceId, List.of());
+    public static ErrorResponse of(int status, String code, String detail) {
+        return new ErrorResponse(status, code, detail, List.of());
     }
 }
