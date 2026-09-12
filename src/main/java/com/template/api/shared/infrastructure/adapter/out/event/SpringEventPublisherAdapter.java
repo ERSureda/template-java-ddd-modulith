@@ -29,6 +29,7 @@ public class SpringEventPublisherAdapter implements EventPublisherPort {
 }
 
 /**
+ * TODO
  * 1. Migración de Base de Datos (Tabla de Eventos)
  * Spring Modulith no inventa una tabla en el aire; necesita persistir los eventos en su tabla técnica event_publication. Si utilizas Flyway o Liquibase sobre PostgreSQL, se debe incluir el script DDL oficial:
  *

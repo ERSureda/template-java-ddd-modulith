@@ -20,8 +20,3 @@ server:
     enabled: true
     min-response-size: 1024
     mime-types: application/json,text/plain,application/xml
-
-outbox:
-  poll-interval: ${OUTBOX_POLL_INTERVAL:1000}
-  purge-cron: ${OUTBOX_PURGE_CRON:0 0 3 * * ?}
-  batch-size: ${OUTBOX_BATCH_SIZE:50}

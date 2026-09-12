@@ -17,11 +17,6 @@ spring:
       ddl-auto: create-drop
   flyway:
     enabled: false
-  modulith:
-    events:
-      jdbc:
-        schema-initialization:
-          enabled: true
 
 logging:
   level:
