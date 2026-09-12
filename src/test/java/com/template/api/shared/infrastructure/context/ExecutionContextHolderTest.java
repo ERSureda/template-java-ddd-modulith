@@ -24,7 +24,7 @@ class ExecutionContextHolderTest {
     @Test
     @DisplayName("Should set and retrieve context on the same thread")
     void setAndGet_shouldReturnContext() {
-        ExecutionContext context = ExecutionContext.anonymous("trace-100");
+        ExecutionContext context = ExecutionContext.anonymous();
 
         ExecutionContextHolder.set(context);
 
@@ -43,7 +43,7 @@ class ExecutionContextHolderTest {
     @Test
     @DisplayName("Should clear context when setting null or calling clear")
     void clear_shouldRemoveContext() {
-        ExecutionContext context = ExecutionContext.anonymous("trace-200");
+        ExecutionContext context = ExecutionContext.anonymous();
 
         ExecutionContextHolder.set(context);
         assertThat(ExecutionContextHolder.get()).isPresent();
@@ -59,7 +59,7 @@ class ExecutionContextHolderTest {
     @Test
     @DisplayName("Should maintain separate contexts across different threads")
     void concurrency_threadsShouldHaveIsolatedContexts() throws InterruptedException {
-        ExecutionContext mainContext = ExecutionContext.anonymous("main-thread");
+        ExecutionContext mainContext = ExecutionContext.anonymous();
         ExecutionContextHolder.set(mainContext);
 
         AtomicReference<Optional<ExecutionContext>> threadContext = new AtomicReference<>();

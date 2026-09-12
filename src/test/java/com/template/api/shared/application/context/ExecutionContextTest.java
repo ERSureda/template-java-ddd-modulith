@@ -19,14 +19,12 @@ class ExecutionContextTest {
         UUID tenantId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
         Set<String> roles = Set.of("ROLE_USER", "ROLE_ADMIN");
-        String correlationId = "corr-12345";
 
-        ExecutionContext context = new ExecutionContext(tenantId, userId, roles, correlationId);
+        ExecutionContext context = new ExecutionContext(tenantId, userId, roles);
 
         assertThat(context.tenantId()).isEqualTo(tenantId);
         assertThat(context.userId()).isEqualTo(userId);
         assertThat(context.roles()).containsExactlyInAnyOrder("ROLE_USER", "ROLE_ADMIN");
-        assertThat(context.correlationId()).isEqualTo(correlationId);
         assertThat(context.isAuthenticated()).isTrue();
         assertThat(context.hasTenant()).isTrue();
         assertThat(context.hasRole("ROLE_ADMIN")).isTrue();
@@ -34,30 +32,21 @@ class ExecutionContextTest {
     }
 
     @Test
-    @DisplayName("Should autogenerate correlationId if null or blank")
-    void autogenerateCorrelationId_whenNullOrBlank() {
-        ExecutionContext ctx1 = new ExecutionContext(null, null, null, null);
-        assertThat(ctx1.correlationId()).isNotBlank();
-        assertThat(ctx1.roles()).isEmpty();
-        assertThat(ctx1.isAuthenticated()).isFalse();
-        assertThat(ctx1.hasTenant()).isFalse();
-
-        ExecutionContext ctx2 = new ExecutionContext(null, null, null, "   ");
-        assertThat(ctx2.correlationId()).isNotBlank();
+    @DisplayName("Should handle null attributes gracefully")
+    void nullAttributes_shouldDefaultSafely() {
+        ExecutionContext ctx = new ExecutionContext(null, null, null);
+        assertThat(ctx.roles()).isEmpty();
+        assertThat(ctx.isAuthenticated()).isFalse();
+        assertThat(ctx.hasTenant()).isFalse();
     }
 
     @Test
-    @DisplayName("Should create anonymous contexts with helper factories")
-    void anonymous_factories() {
-        ExecutionContext anonymousWithCorr = ExecutionContext.anonymous("my-trace-id");
-        assertThat(anonymousWithCorr.correlationId()).isEqualTo("my-trace-id");
-        assertThat(anonymousWithCorr.isAuthenticated()).isFalse();
-        assertThat(anonymousWithCorr.hasTenant()).isFalse();
-        assertThat(anonymousWithCorr.roles()).isEmpty();
-
-        ExecutionContext anonymousAuto = ExecutionContext.anonymous();
-        assertThat(anonymousAuto.correlationId()).isNotBlank();
-        assertThat(anonymousAuto.isAuthenticated()).isFalse();
+    @DisplayName("Should create anonymous contexts with helper factory")
+    void anonymous_factory() {
+        ExecutionContext anonymous = ExecutionContext.anonymous();
+        assertThat(anonymous.isAuthenticated()).isFalse();
+        assertThat(anonymous.hasTenant()).isFalse();
+        assertThat(anonymous.roles()).isEmpty();
     }
 
     @Test
@@ -66,7 +55,7 @@ class ExecutionContextTest {
         Set<String> mutableRoles = new HashSet<>();
         mutableRoles.add("ROLE_USER");
 
-        ExecutionContext context = new ExecutionContext(null, null, mutableRoles, "corr-1");
+        ExecutionContext context = new ExecutionContext(null, null, mutableRoles);
         mutableRoles.add("ROLE_ADMIN");
 
         assertThat(context.roles()).containsExactly("ROLE_USER");

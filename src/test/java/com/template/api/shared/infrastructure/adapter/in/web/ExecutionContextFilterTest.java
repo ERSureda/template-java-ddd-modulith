@@ -14,7 +14,6 @@ import org.springframework.mock.web.MockHttpServletResponse;
 
 import java.io.IOException;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,14 +38,12 @@ class ExecutionContextFilterTest {
     }
 
     @Test
-    @DisplayName("Should extract headers, populate context and MDC, set response header, and clear in finally")
+    @DisplayName("Should extract headers, populate context and MDC, and clear in finally")
     void withValidHeaders_shouldPopulateContextAndClearInFinally() throws ServletException, IOException {
         UUID tenantId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
-        String correlationId = "corr-test-123";
 
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader(ApiHeaders.CORRELATION_ID, correlationId);
         request.addHeader(ApiHeaders.TENANT_ID, tenantId.toString());
         request.addHeader(ApiHeaders.USER_ID, userId.toString());
         request.addHeader(ApiHeaders.ROLES, "ROLE_USER, ROLE_ADMIN");
@@ -54,7 +51,6 @@ class ExecutionContextFilterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         AtomicReference<ExecutionContext> contextInChain = new AtomicReference<>();
-        AtomicReference<String> mdcCorrelationInChain = new AtomicReference<>();
         AtomicReference<String> mdcTenantInChain = new AtomicReference<>();
         AtomicReference<String> mdcUserInChain = new AtomicReference<>();
 
@@ -62,7 +58,6 @@ class ExecutionContextFilterTest {
             @Override
             public void doFilter(jakarta.servlet.ServletRequest req, jakarta.servlet.ServletResponse res) {
                 contextInChain.set(ExecutionContextHolder.get().orElse(null));
-                mdcCorrelationInChain.set(MDC.get("correlationId"));
                 mdcTenantInChain.set(MDC.get("tenantId"));
                 mdcUserInChain.set(MDC.get("userId"));
             }
@@ -72,28 +67,22 @@ class ExecutionContextFilterTest {
 
         // Verification inside chain
         assertThat(contextInChain.get()).isNotNull();
-        assertThat(contextInChain.get().correlationId()).isEqualTo(correlationId);
         assertThat(contextInChain.get().tenantId()).isEqualTo(tenantId);
         assertThat(contextInChain.get().userId()).isEqualTo(userId);
         assertThat(contextInChain.get().roles()).containsExactlyInAnyOrder("ROLE_USER", "ROLE_ADMIN");
 
-        assertThat(mdcCorrelationInChain.get()).isEqualTo(correlationId);
         assertThat(mdcTenantInChain.get()).isEqualTo(tenantId.toString());
         assertThat(mdcUserInChain.get()).isEqualTo(userId.toString());
 
-        // Response header verification
-        assertThat(response.getHeader(ApiHeaders.CORRELATION_ID)).isEqualTo(correlationId);
-
         // Cleanup verification (post-filter)
         assertThat(ExecutionContextHolder.get()).isEmpty();
-        assertThat(MDC.get("correlationId")).isNull();
         assertThat(MDC.get("tenantId")).isNull();
         assertThat(MDC.get("userId")).isNull();
     }
 
     @Test
-    @DisplayName("Should generate correlationId and handle missing optional headers")
-    void withMissingHeaders_shouldGenerateCorrelationId() throws ServletException, IOException {
+    @DisplayName("Should handle missing optional headers safely")
+    void withMissingHeaders_shouldHandleSafely() throws ServletException, IOException {
         MockHttpServletRequest request = new MockHttpServletRequest();
         MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -109,12 +98,10 @@ class ExecutionContextFilterTest {
         filter.doFilter(request, response, filterChain);
 
         assertThat(contextInChain.get()).isNotNull();
-        assertThat(contextInChain.get().correlationId()).isNotBlank();
         assertThat(contextInChain.get().tenantId()).isNull();
         assertThat(contextInChain.get().userId()).isNull();
         assertThat(contextInChain.get().roles()).isEmpty();
 
-        assertThat(response.getHeader(ApiHeaders.CORRELATION_ID)).isEqualTo(contextInChain.get().correlationId());
         assertThat(ExecutionContextHolder.get()).isEmpty();
     }
 
@@ -146,7 +133,6 @@ class ExecutionContextFilterTest {
     @DisplayName("Should always clear context and MDC even when filter chain throws an exception")
     void whenFilterChainThrows_shouldAlwaysClear() {
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader(ApiHeaders.CORRELATION_ID, "corr-err");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         MockFilterChain failingChain = new MockFilterChain() {
@@ -161,6 +147,7 @@ class ExecutionContextFilterTest {
                 .hasMessage("Simulated chain failure");
 
         assertThat(ExecutionContextHolder.get()).isEmpty();
-        assertThat(MDC.get("correlationId")).isNull();
+        assertThat(MDC.get("tenantId")).isNull();
+        assertThat(MDC.get("userId")).isNull();
     }
 }
