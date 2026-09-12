@@ -36,28 +36,3 @@ public class ValidationException extends BaseException {
         return violations;
     }
 }
-
-/*
-package com.template.api.shared.domain.exception;
-
-import com.template.api.shared.domain.error.CommonError;
-import com.template.api.shared.domain.error.ErrorCategory;
-import com.template.api.shared.domain.error.ErrorCode;
-
-import java.io.Serial;
-
-public class ValidationException extends BaseException {
-
-    @Serial
-    private static final long serialVersionUID = 1L;
-
-    public ValidationException(ErrorCode errorCode, String message) {
-        super(errorCode, ErrorCategory.VALIDATION, message);
-    }
-
-    public ValidationException(String message) {
-        super(CommonError.VALIDATION_ERROR, ErrorCategory.VALIDATION, message);
-    }
-}
-
- */
