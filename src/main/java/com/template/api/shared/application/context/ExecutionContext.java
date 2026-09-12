@@ -6,37 +6,22 @@ import java.util.UUID;
 /**
  * Record inmutable que transporta el contexto de ejecución de la petición (SHR-03).
  *
- * @param tenantId      Identificador del inquilino/organización (opcional).
- * @param userId        Identificador del usuario autenticado (opcional).
- * @param roles         Conjunto inmutable de roles asociados al usuario.
- * @param correlationId Identificador único de correlación para trazabilidad distribuida (obligatorio).
+ * @param tenantId Identificador del inquilino/organización (opcional).
+ * @param userId   Identificador del usuario autenticado (opcional).
+ * @param roles    Conjunto inmutable de roles asociados al usuario.
  */
 public record ExecutionContext(
         UUID tenantId,
         UUID userId,
-        Set<String> roles,
-        String correlationId
+        Set<String> roles
 ) {
 
     public ExecutionContext {
         roles = (roles != null) ? Set.copyOf(roles) : Set.of();
-        if (correlationId == null || correlationId.isBlank()) {
-            correlationId = UUID.randomUUID().toString();
-        }
     }
 
-    /**
-     * Factoría para contextos anónimos o no autenticados con un identificador de correlación explícito.
-     */
-    public static ExecutionContext anonymous(String correlationId) {
-        return new ExecutionContext(null, null, Set.of(), correlationId);
-    }
-
-    /**
-     * Factoría para contextos anónimos con identificador de correlación autogenerado.
-     */
     public static ExecutionContext anonymous() {
-        return new ExecutionContext(null, null, Set.of(), UUID.randomUUID().toString());
+        return new ExecutionContext(null, null, Set.of());
     }
 
     public boolean isAuthenticated() {
