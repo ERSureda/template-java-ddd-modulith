@@ -14,7 +14,7 @@ El repositorio semilla contiene exclusivamente **el código transversal, agnóst
 | --- | --- | --- |
 | **Kernel compartido (`shared/`)** | **Semilla** | Invariable entre módulos; define tipos base de dominio, contexto y jerarquía de errores. |
 | **Maquinaria Outbox (Relay, DLQ, Purga)** | **Semilla** | Infraestructura de entrega garantizada idéntica en toda la aplicación. |
-| **Filtros de Contexto y Gateway Offloading** | **Semilla** | Reconstrucción transversal de identidad (`ExecutionContext`) y trazas (`correlationId`). |
+| **Filtros de Contexto y Gateway Offloading** | **Semilla** | Reconstrucción transversal de identidad y contexto (`ExecutionContext`). |
 | **Guardianes CI (Spring Modulith + ArchUnit)** | **Semilla** | Suite de validación estricta de las reglas del manual normativo que rompen el build ante fallos. |
 | **Build y Perfiles (Toolchain, Virtual Threads)** | **Semilla** | Configuración base de empaquetado, Java 25, Dockerfile y perfiles de entorno parametrizables (`rootProject.name = providers.gradleProperty('projectName').getOrElse('<project-name>')`). |
 | **Módulo de Referencia (`<subdominio-referencia>`)** | **Semilla** | Slice vertical canónico para que los tests de arquitectura verifiquen código real compilado. |
@@ -46,7 +46,7 @@ Configurado bajo el paquete `<namespace.base>.shared` y declarado formalmente co
 
 ### 2.2 Aplicación Base (`shared.application`)
 
-* **`ExecutionContext`:** Record inmutable que transporta el contexto de la petición: `tenantId` (UUID), `userId` (UUID), `roles` (Set) y `correlationId` (String).
+* **`ExecutionContext`:** Record inmutable que transporta el contexto de la petición: `tenantId` (UUID), `userId` (UUID) y `roles` (Set).
 * **`ExecutionContextHolder`:** Portador estático desacoplado, seguro frente a la concurrencia masiva de Virtual Threads en Java 25.
 * **Comandos y Consultas Híbridos:** Comandos exclusivos Web y Consultas (`Query`) definidos como records planos sin validación interna (apoyados en `@Valid` web); comandos multicanal (colas Kafka/RabbitMQ, eventos, schedulers) con validación defensiva inmediata fail-fast (`Objects.requireNonNull`).
 * **`PageResult<T>`:** Record inmutable transversal para respuestas paginadas: `items` (List), `page` (int), `size` (int), `totalElements` (long) y `totalPages` (int).
@@ -57,7 +57,7 @@ Configurado bajo el paquete `<namespace.base>.shared` y declarado formalmente co
 ### 2.3 Infraestructura y Web Base (`shared.infrastructure`)
 
 * **`UuidGeneratorAdapter`:** Implementación de `UuidGeneratorPort` basada en RFC 9562 / UUIDv7.
-* **`ApiHeaders`:** Contrato de cabeceras HTTP provenientes del API Gateway o proxies perimetrales: `X-Tenant-Id`, `X-User-Id`, `X-Roles`, `X-Correlation-Id`.
+* **`ApiHeaders`:** Contrato de cabeceras HTTP provenientes del API Gateway o proxies perimetrales: `X-Tenant-Id`, `X-User-Id`, `X-Roles`.
 * **`ExecutionContextFilter`:** `OncePerRequestFilter` que extrae las cabeceras HTTP, inicializa el `ExecutionContext` en el holder y garantiza su limpieza en el bloque `finally`.
 * **`GlobalExceptionHandler`:** `@RestControllerAdvice` que captura `BaseException`, fallos de validación de Spring y excepciones no controladas. Traduce cualquier fallo al payload estándar ultraligero `ErrorResponse`:
 
