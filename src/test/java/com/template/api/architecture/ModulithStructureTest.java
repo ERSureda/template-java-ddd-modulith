@@ -5,6 +5,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.modulith.core.ApplicationModule;
 import org.springframework.modulith.core.ApplicationModules;
+import org.springframework.modulith.docs.Documenter;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -12,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ModulithStructureTest {
 
     @Test
-    @DisplayName("Debe verificar que la estructura modular y fronteras de Modulith son válidas")
+    @DisplayName("Debe verificar que la estructura modular y fronteras de Modulith son válidas (ARC-01)")
     void verifyModulithStructure() {
         ApplicationModules modules = ApplicationModules.of(ApiApplication.class);
         modules.verify();
@@ -21,5 +22,13 @@ class ModulithStructureTest {
                 .orElseThrow(() -> new AssertionError("El módulo 'shared' debe ser detectado por Spring Modulith"));
 
         assertThat(sharedModule.getDisplayName()).isEqualTo("Shared");
+    }
+
+    @Test
+    @DisplayName("Debe generar la documentación y diagramas de arquitectura de Modulith (ARC-03)")
+    void generateArchitectureDocumentation() {
+        new Documenter(ApplicationModules.of(ApiApplication.class))
+                .writeDocumentation()
+                .writeIndividualModulesAsPlantUml();
     }
 }
