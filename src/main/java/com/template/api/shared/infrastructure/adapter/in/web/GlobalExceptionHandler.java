@@ -1,16 +1,13 @@
 package com.template.api.shared.infrastructure.adapter.in.web;
 
-import com.template.api.shared.application.context.ExecutionContext;
 import com.template.api.shared.domain.error.CommonError;
 import com.template.api.shared.domain.error.ErrorCategory;
 import com.template.api.shared.domain.exception.BaseException;
 import com.template.api.shared.domain.exception.ValidationException;
-import com.template.api.shared.infrastructure.context.ExecutionContextHolder;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -21,18 +18,16 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import java.util.List;
-import java.util.UUID;
 
 /**
  * Adaptador de entrada web centralizado para la captura y estandarización de excepciones.
  * <p>
  * Transforma fallos de dominio, validaciones de Bean Validation y excepciones nativas
- * del framework MVC a un modelo homogéneo {@link ErrorResponse} con trazabilidad distribuida.
+ * del framework MVC a un modelo homogéneo ultraligero {@link ErrorResponse}.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
@@ -45,15 +40,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public static final String VALIDATION_FAILED_MESSAGE =
             "La solicitud contiene campos inválidos o ausentes";
 
-    private static final String MDC_TRACE_ID_KEY = "traceId";
-
     private static final ResponseEntity<ErrorResponse> CACHED_INTERNAL_ERROR_RESPONSE =
             ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
                     ErrorResponse.of(
                             HttpStatus.INTERNAL_SERVER_ERROR.value(),
                             CommonError.INTERNAL_ERROR.code(),
                             GENERIC_INTERNAL_ERROR_MESSAGE,
-                            null,
                             List.of()));
 
     private final boolean maskInternalDetails;
@@ -73,16 +65,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // =========================================================================
 
     @ExceptionHandler(BaseException.class)
-    public ResponseEntity<ErrorResponse> handleBaseException(BaseException ex, HttpServletRequest request) {
+    public ResponseEntity<ErrorResponse> handleBaseException(BaseException ex) {
         ErrorCategory category = ex.getCategory();
         HttpStatus status = HttpErrorCategoryMapper.toHttpStatus(category);
         String code = ex.getErrorCode().code();
-        String traceId = resolveTraceId(request);
 
         if (category.capturesDiagnostics()) {
-            log.error("Fallo técnico de infraestructura o sistema [traceId={}, code={}]: {}", traceId, code, ex.getMessage(), ex);
+            log.error("Fallo técnico de infraestructura o sistema [code={}]: {}", code, ex.getMessage(), ex);
         } else {
-            log.warn("Fallo controlado de regla de dominio [traceId={}, code={}]: {}", traceId, code, ex.getMessage());
+            log.warn("Fallo controlado de regla de dominio [code={}]: {}", code, ex.getMessage());
         }
 
         if (category == ErrorCategory.INTERNAL && maskInternalDetails) {
@@ -99,15 +90,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 status.value(),
                 code,
                 ex.getMessage(),
-                traceId,
                 violations
         );
 
         return ResponseEntity.status(status).body(response);
     }
 
-    public ResponseEntity<ErrorResponse> handleBaseException(BaseException ex) {
-        return handleBaseException(ex, null);
+    public ResponseEntity<ErrorResponse> handleBaseException(BaseException ex, HttpServletRequest request) {
+        return handleBaseException(ex);
     }
 
     // =========================================================================
@@ -121,9 +111,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             HttpStatusCode status,
             WebRequest request
     ) {
-        String traceId = resolveTraceId(request);
-        log.warn("Solicitud rechazada por validación de payload [traceId={}]: {} violaciones detectadas",
-                traceId, ex.getBindingResult().getFieldErrorCount());
+        log.warn("Solicitud rechazada por validación de payload: {} violaciones detectadas",
+                ex.getBindingResult().getFieldErrorCount());
 
         List<ValidationErrorDetail> violations = ex.getBindingResult().getFieldErrors().stream()
                 .map(this::mapFieldError)
@@ -133,7 +122,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 HttpStatus.BAD_REQUEST.value(),
                 CommonError.VALIDATION_ERROR.code(),
                 VALIDATION_FAILED_MESSAGE,
-                traceId,
                 violations
         );
 
@@ -145,12 +133,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // =========================================================================
 
     @ExceptionHandler(ConstraintViolationException.class)
-    public ResponseEntity<ErrorResponse> handleConstraintViolation(
-            ConstraintViolationException ex,
-            HttpServletRequest request
-    ) {
-        String traceId = resolveTraceId(request);
-        log.warn("Violación de restricción en parámetros HTTP [traceId={}]: {}", traceId, ex.getMessage());
+    public ResponseEntity<ErrorResponse> handleConstraintViolation(ConstraintViolationException ex) {
+        log.warn("Violación de restricción en parámetros HTTP: {}", ex.getMessage());
 
         List<ValidationErrorDetail> violations = ex.getConstraintViolations().stream()
                 .map(v -> new ValidationErrorDetail(v.getPropertyPath().toString(), v.getMessage()))
@@ -160,11 +144,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 HttpStatus.BAD_REQUEST.value(),
                 CommonError.VALIDATION_ERROR.code(),
                 VALIDATION_FAILED_MESSAGE,
-                traceId,
                 violations
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+    }
+
+    public ResponseEntity<ErrorResponse> handleConstraintViolation(
+            ConstraintViolationException ex,
+            HttpServletRequest request
+    ) {
+        return handleConstraintViolation(ex);
     }
 
     // =========================================================================
@@ -172,9 +162,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // =========================================================================
 
     @ExceptionHandler(Throwable.class)
-    public ResponseEntity<ErrorResponse> handleUnhandledException(Throwable ex, HttpServletRequest request) {
-        String traceId = resolveTraceId(request);
-        log.error("Excepción no controlada interceptada en capa web [traceId={}]", traceId, ex);
+    public ResponseEntity<ErrorResponse> handleUnhandledException(Throwable ex) {
+        log.error("Excepción no controlada interceptada en capa web", ex);
 
         if (maskInternalDetails) {
             return CACHED_INTERNAL_ERROR_RESPONSE;
@@ -184,15 +173,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         ErrorResponse response = ErrorResponse.of(
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 CommonError.INTERNAL_ERROR.code(),
-                detail,
-                traceId
+                detail
         );
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
     }
 
-    public ResponseEntity<ErrorResponse> handleUnhandledException(Throwable ex) {
-        return handleUnhandledException(ex, null);
+    public ResponseEntity<ErrorResponse> handleUnhandledException(Throwable ex, HttpServletRequest request) {
+        return handleUnhandledException(ex);
     }
 
     // =========================================================================
@@ -210,7 +198,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             return ResponseEntity.status(statusCode).headers(headers).body(body);
         }
 
-        String traceId = resolveTraceId(request);
         String code = mapStatusCodeToErrorCode(statusCode);
         String detail = (body instanceof ProblemDetail pd && pd.getDetail() != null)
                 ? pd.getDetail()
@@ -219,8 +206,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         ErrorResponse errorResponse = ErrorResponse.of(
                 statusCode.value(),
                 code,
-                detail,
-                traceId
+                detail
         );
 
         return ResponseEntity.status(statusCode).headers(headers).body(errorResponse);
@@ -229,44 +215,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // =========================================================================
     // MÉTODOS AUXILIARES PRIVADOS
     // =========================================================================
-
-    private String resolveTraceId(WebRequest request) {
-        if (request instanceof ServletWebRequest servletWebRequest) {
-            return resolveTraceId(servletWebRequest.getRequest());
-        }
-        return resolveTraceId((HttpServletRequest) null);
-    }
-
-    private String resolveTraceId(HttpServletRequest request) {
-        // 1. Contexto de ejecucion propagado (SHR-03)
-        var contextCorrelationId = ExecutionContextHolder.get()
-                .map(ExecutionContext::correlationId);
-        if (contextCorrelationId.isPresent()) {
-            return contextCorrelationId.get();
-        }
-
-        // 2. MDC (correlationId inyectado por ExecutionContextFilter o traceId)
-        String mdcCorrelationId = MDC.get("correlationId");
-        if (mdcCorrelationId != null && !mdcCorrelationId.isBlank()) {
-            return mdcCorrelationId;
-        }
-
-        String traceId = MDC.get(MDC_TRACE_ID_KEY);
-        if (traceId != null && !traceId.isBlank()) {
-            return traceId;
-        }
-
-        // 3. Cabecera HTTP
-        if (request != null) {
-            String headerTraceId = request.getHeader(ApiHeaders.CORRELATION_ID);
-            if (headerTraceId != null && !headerTraceId.isBlank()) {
-                return headerTraceId;
-            }
-        }
-
-        // 4. Fallback autogenerado
-        return UUID.randomUUID().toString();
-    }
 
     private ValidationErrorDetail mapFieldError(FieldError fieldError) {
         String message = fieldError.getDefaultMessage() != null
