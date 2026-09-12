@@ -21,11 +21,14 @@ public abstract class BaseEntity<T> {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         BaseEntity<?> that = (BaseEntity<?>) o;
+        if (this.id == null || that.id == null) {
+            return false;
+        }
         return Objects.equals(id, that.id);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id);
+        return id != null ? id.hashCode() : getClass().hashCode();
     }
 }
