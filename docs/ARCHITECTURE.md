@@ -228,7 +228,7 @@ Cuando se consultan datos para mostrarlos en pantallas o APIs, **queda prohibido
 
 * **`SHR-01 · NEVER` [A]** El paquete `shared` contendrá reglas de negocio ligadas a subdominios específicos.
 * **`SHR-02 · MUST` [A]** Todos los identificadores únicos del sistema se generarán con formato **UUIDv7** secuencial en el tiempo mediante `UuidGeneratorPort`.
-* **`SHR-03 · MUST` [A]** Toda petición debe propagar el contexto del usuario/inquilino y el identificador de correlación (`correlationId`) a través de un `ExecutionContext` inmutable.
+* **`SHR-03 · MUST` [A]** Toda petición debe propagar el contexto de seguridad e inquilino (`tenantId`, `userId`, `roles`) a través de un `ExecutionContext` inmutable.
 * **`SHR-04 · MUST` [R]** Los errores de negocio deben asociarse a un código alfanumérico inmutable y tipado (ej. `RESOURCE_NOT_FOUND`), separando el código técnico del mensaje descriptivo.
 
 ---
