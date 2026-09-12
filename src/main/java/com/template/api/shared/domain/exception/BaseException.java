@@ -36,8 +36,8 @@ public abstract class BaseException extends RuntimeException {
                 /* writableStackTrace = */ capturesDiagnostics(category)
         );
 
-        this.errorCode = errorCode;
-        this.category = category;
+        this.errorCode = Objects.requireNonNull(errorCode, "errorCode cannot be null");
+        this.category = Objects.requireNonNull(category, "category cannot be null");
     }
 
     protected BaseException(

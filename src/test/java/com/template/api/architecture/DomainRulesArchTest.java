@@ -5,6 +5,7 @@ import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.constructors;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
@@ -20,6 +21,12 @@ class DomainRulesArchTest {
                             "com.fasterxml.jackson..",
                             "lombok.."
                     ).as("DOM-01: El dominio no debe depender de frameworks o librerías de terceros");
+
+    @ArchTest
+    static final ArchRule domain_models_should_not_expose_public_constructors =
+            constructors().that().areDeclaredInClassesThat().resideInAPackage("..domain.model..")
+                    .should().notBePublic()
+                    .as("DOM-02: Las entidades y agregados de dominio no deben exponer constructores públicos");
 
     @ArchTest
     static final ArchRule domain_models_should_not_expose_public_setters =

@@ -15,7 +15,7 @@ public class ResourceNotFoundException extends BaseException {
         super(
                 CommonError.RESOURCE_NOT_FOUND,
                 ErrorCategory.NOT_FOUND,
-                String.format("The entity '%s' with ID '%s' does not exist.", entityClass.getSimpleName(), id.toString())
+                "The entity '" + (entityClass != null ? entityClass.getSimpleName() : "Resource") + "' with ID '" + id + "' does not exist."
         );
     }
 

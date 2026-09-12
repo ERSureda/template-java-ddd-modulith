@@ -14,7 +14,7 @@ public abstract class AggregateRoot<T> extends BaseEntity<T> {
      */
     protected Long version;
 
-    private final transient List<DomainEvent> domainEvents = new ArrayList<>();
+    private transient List<DomainEvent> domainEvents;
 
     protected AggregateRoot() {
         super();
@@ -30,16 +30,22 @@ public abstract class AggregateRoot<T> extends BaseEntity<T> {
     }
 
     public boolean hasDomainEvents() {
-        return !this.domainEvents.isEmpty();
+        return this.domainEvents != null && !this.domainEvents.isEmpty();
     }
 
     protected void registerEvent(DomainEvent event) {
-        domainEvents.add(Objects.requireNonNull(event, "EVENT_CANNOT_BE_NULL"));
+        if (this.domainEvents == null) {
+            this.domainEvents = new ArrayList<>(2);
+        }
+        this.domainEvents.add(Objects.requireNonNull(event, "EVENT_CANNOT_BE_NULL"));
     }
 
     public List<DomainEvent> pullDomainEvents() {
+        if (this.domainEvents == null || this.domainEvents.isEmpty()) {
+            return List.of();
+        }
         List<DomainEvent> currentEvents = List.copyOf(this.domainEvents);
-        this.domainEvents.clear();
+        this.domainEvents = null;
         return currentEvents;
     }
 }
